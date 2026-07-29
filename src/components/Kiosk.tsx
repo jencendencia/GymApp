@@ -19,13 +19,20 @@ function Kiosk({ onRefresh }: KioskProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [showManualSearch, setShowManualSearch] = useState(false)
   const [countdown, setCountdown] = useState(AUTO_CLOSE_SECONDS)
+  const [matchKey, setMatchKey] = useState(0)
   const autoScanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const isScanning = useRef(false)
+  const stateRef = useRef(state)
 
-  // Auto-scan when in idle state
+  // Keep stateRef in sync
   useEffect(() => {
-    if (state === 'idle' && !showManualSearch) {
+    stateRef.current = state
+  }, [state])
+
+  // Auto-scan in any state (except when manual search is open)
+  useEffect(() => {
+    if (!showManualSearch) {
       autoScanTimer.current = setTimeout(() => {
         handleRealScan()
       }, AUTO_SCAN_DELAY)
@@ -36,7 +43,7 @@ function Kiosk({ onRefresh }: KioskProps) {
         autoScanTimer.current = null
       }
     }
-  }, [state, showManualSearch])
+  }, [state, showManualSearch, matchKey])
 
   // Countdown timer for match-found auto-close
   useEffect(() => {
@@ -61,22 +68,23 @@ function Kiosk({ onRefresh }: KioskProps) {
         countdownTimer.current = null
       }
     }
-  }, [state === 'match-found'])
+  }, [state === 'match-found', matchKey])
 
   // Real fingerprint check-in using WebAuthn
   const handleRealScan = useCallback(async () => {
     if (isScanning.current) return
     isScanning.current = true
 
-    setState('scanning')
-    
+    const currentState = stateRef.current
+
     try {
       // Get all members to find their credential IDs
+      // Stay on current state during prep work — no UI flicker
       const members = await window.electronAPI.getMembers()
       
       if (members.length === 0) {
-        // No members yet — silently go back to idle and retry
-        setState('idle')
+        // No members yet — schedule retry silently (no state change)
+        autoScanTimer.current = setTimeout(() => handleRealScan(), AUTO_SCAN_DELAY)
         return
       }
       
@@ -99,14 +107,20 @@ function Kiosk({ onRefresh }: KioskProps) {
       }
       
       if (allowCredentials.length === 0) {
-        // No registered fingerprints yet — silently go back to idle and retry
-        setState('idle')
+        // No registered fingerprints yet — schedule retry silently
+        autoScanTimer.current = setTimeout(() => handleRealScan(), AUTO_SCAN_DELAY)
         return
       }
       
       // Generate a challenge
       const challenge = new Uint8Array(32)
       crypto.getRandomValues(challenge)
+      
+      // Only show scanning UI if we're not already showing a match
+      // If a modal is already visible, scan silently in the background
+      if (currentState === 'idle' || currentState === 'no-match') {
+        setState('scanning')
+      }
       
       // Prompt the browser's WebAuthn to scan a fingerprint
       // This waits patiently until the user touches the scanner or cancels
@@ -136,6 +150,10 @@ function Kiosk({ onRefresh }: KioskProps) {
           if (member.status === 'expired') {
             setState('expired')
           } else {
+            // If we were already on match-found, bump matchKey to reset countdown
+            if (stateRef.current === 'match-found') {
+              setMatchKey(prev => prev + 1)
+            }
             setState('match-found')
             
             // Log the check-in
@@ -148,18 +166,23 @@ function Kiosk({ onRefresh }: KioskProps) {
             onRefresh()
           }
         } else {
-          // Credential matched but member not found — go back to idle
+          // Credential matched but member not found — go to idle
           setState('idle')
         }
       } else {
-        // User cancelled the scan — go back to idle
-        setState('idle')
+        // User cancelled — if we were idle, go back to idle; if showing a match, stay on it
+        if (currentState === 'idle' || currentState === 'no-match') {
+          setState('idle')
+        }
+        // else: stay on match-found/expired — don't dismiss the modal
       }
     } catch (error: any) {
-      // WebAuthn error (e.g. NotAllowedError from user cancelling, or env not supported)
-      // Silently return to idle so the auto-scan loop keeps trying
       console.error('Fingerprint scan error:', error.name || error.message)
-      setState('idle')
+      // Only go to idle if we weren't showing a match
+      if (stateRef.current === 'idle' || stateRef.current === 'no-match' || stateRef.current === 'scanning') {
+        setState('idle')
+      }
+      // else: stay on match-found/expired — don't dismiss the modal
     } finally {
       isScanning.current = false
     }
