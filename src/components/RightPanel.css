@@ -1,0 +1,232 @@
+.right-panel {
+  width: var(--sidebar-width);
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.panel-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.clock-time {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.clock-date {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.panel-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-section:last-child {
+  border-bottom: none;
+}
+
+.section-title {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 16px;
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.stat-box {
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-number {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.stat-number.accent {
+  color: var(--accent);
+}
+
+.stat-number.danger {
+  color: var(--danger);
+}
+
+.stat-number.warn {
+  color: var(--warn);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Check-in List */
+.checkin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkin-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.checkin-avatar {
+  width: 36px;
+  height: 36px;
+  background: var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.checkin-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.checkin-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checkin-time {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.checkin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.checkin-dot.success {
+  background: var(--accent);
+}
+
+.checkin-dot.failed {
+  background: var(--danger);
+}
+
+.checkin-dot.override {
+  background: var(--warn);
+}
+
+/* Expiring List */
+.expiring-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.expiring-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.expiring-avatar {
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 176, 32, 0.15);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+.expiring-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.expiring-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.expiring-plan {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.expiring-days {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.expiring-days.urgent {
+  color: var(--danger);
+}
+
+.empty-message {
+  font-size: 13px;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 20px 0;
+}

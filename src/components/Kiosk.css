@@ -1,0 +1,381 @@
+.kiosk {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  overflow-y: auto;
+}
+
+/* Idle State */
+.kiosk-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.radar-container {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.radar-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--accent-dim);
+  border-radius: 50%;
+  animation: radar-pulse 2.4s ease-out infinite;
+}
+
+.ring-1 {
+  animation-delay: 0s;
+}
+
+.ring-2 {
+  animation-delay: 0.8s;
+}
+
+.ring-3 {
+  animation-delay: 1.6s;
+}
+
+.fingerprint-icon {
+  position: relative;
+  z-index: 1;
+  color: var(--accent);
+}
+
+.kiosk-title {
+  font-size: 32px;
+  color: var(--text);
+  margin: 0;
+}
+
+.kiosk-subtitle {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.kiosk-scan-btn {
+  padding: 16px 40px;
+  font-size: 16px;
+  margin-top: 16px;
+}
+
+.kiosk-manual-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 16px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.kiosk-manual-link:hover {
+  color: var(--text);
+}
+
+.manual-search-box {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  width: 400px;
+}
+
+.manual-search-box .input {
+  flex: 1;
+}
+
+/* Scanning State */
+.kiosk-scanning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.scanning-animation {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scanning-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  animation: radar-pulse 1.2s ease-out infinite;
+}
+
+.scanning-ring.ring-2 {
+  animation-delay: 0.4s;
+}
+
+.scanning-ring.ring-3 {
+  animation-delay: 0.8s;
+}
+
+/* Profile State */
+.kiosk-profile {
+  width: 100%;
+  max-width: 500px;
+}
+
+.profile-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-banner.active {
+  background: rgba(198, 255, 61, 0.15);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-bottom: none;
+}
+
+.profile-banner.expired {
+  background: rgba(255, 176, 32, 0.15);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-bottom: none;
+}
+
+.banner-icon {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Countdown ring */
+.countdown-badge {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.countdown-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.countdown-track {
+  fill: none;
+  stroke: rgba(198, 255, 61, 0.2);
+  stroke-width: 3;
+}
+
+.countdown-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 1s linear;
+}
+
+.countdown-text {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  z-index: 1;
+}
+
+.profile-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0 0 12px 12px;
+  padding: 24px;
+}
+
+.profile-header {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.profile-avatar {
+  width: 72px;
+  height: 72px;
+  background: var(--surface-2);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-name {
+  font-size: 24px;
+  margin: 0;
+}
+
+.profile-id {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.profile-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.metadata-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-label {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metadata-value {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.metadata-value.danger {
+  color: var(--danger);
+}
+
+.expiry-section {
+  margin-bottom: 24px;
+}
+
+.expiry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.expiry-label {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.expiry-date {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.expiry-bar {
+  height: 6px;
+  background: var(--surface-2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.expiry-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.expiry-fill.active {
+  background: var(--accent);
+}
+
+.expiry-fill.expired {
+  background: var(--danger);
+}
+
+.expiry-status {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.expiry-status.expired {
+  color: var(--danger);
+}
+
+.profile-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.profile-actions .btn {
+  flex: 1;
+}
+
+/* No Match State */
+.kiosk-no-match {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.no-match-icon {
+  width: 80px;
+  height: 80px;
+  background: rgba(255, 92, 92, 0.15);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  color: var(--danger);
+}
+
+.no-match-actions {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}

@@ -1,0 +1,392 @@
+.members-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+  overflow: hidden;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+}
+
+.page-title {
+  font-size: 28px;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.search-input {
+  width: 300px;
+}
+
+.members-table-container {
+  flex: 1;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.members-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.members-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  padding: 14px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+}
+
+.members-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.members-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.members-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.member-table-photo {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.member-table-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.empty-row {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 40px !important;
+}
+
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.btn-icon:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-icon.danger:hover {
+  background: rgba(255, 92, 92, 0.15);
+  color: var(--danger);
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.form-group .input {
+  width: 100%;
+}
+
+/* Modal sizes */
+.modal-lg {
+  width: 800px;
+}
+
+/* Enrollment section */
+.enrollment-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Enrollment layout */
+.enrollment-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 24px;
+}
+
+.enrollment-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.enrollment-card {
+  background: var(--surface-2);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+}
+
+.enrollment-form {
+  min-width: 0;
+}
+
+.section-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+
+/* Photo section */
+.photo-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.photo-preview {
+  width: 120px;
+  height: 120px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 2px solid var(--border);
+}
+
+.photo-placeholder {
+  width: 120px;
+  height: 120px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  border: 2px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.photo-icon {
+  font-size: 24px;
+}
+
+.photo-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  min-height: 32px;
+}
+
+/* Fingerprint section */
+.fingerprint-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  background: var(--surface-2);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 16px;
+}
+
+.fingerprint-idle,
+.fingerprint-captured,
+.fingerprint-scanning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.fingerprint-icon-large {
+  color: var(--text-faint);
+}
+
+.fingerprint-success-icon {
+  width: 48px;
+  height: 48px;
+  background: rgba(198, 255, 61, 0.2);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.fingerprint-quality {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+/* Fingerprint scanning animation */
+.fingerprint-animation {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scan-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  animation: radar-pulse 1.5s ease-out infinite;
+}
+
+.scan-ring.ring-2 {
+  animation-delay: 0.5s;
+}
+
+.scan-ring.ring-3 {
+  animation-delay: 1s;
+}
+
+.fingerprint-icon-pulse {
+  font-size: 24px;
+  z-index: 1;
+}
+
+.fingerprint-status {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.fingerprint-status.success {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.fingerprint-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.fingerprint-progress {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+

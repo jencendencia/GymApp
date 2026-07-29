@@ -1,0 +1,90 @@
+.plans-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+  overflow: hidden;
+}
+
+.plans-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.plan-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.plan-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.plan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.plan-type-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
+.plan-type-badge.monthly {
+  background: rgba(77, 168, 255, 0.15);
+  color: var(--info);
+}
+
+.plan-type-badge.quarterly {
+  background: rgba(198, 255, 61, 0.15);
+  color: var(--accent);
+}
+
+.plan-type-badge.annual {
+  background: rgba(143, 190, 42, 0.15);
+  color: var(--accent-dim);
+}
+
+.plan-type-badge.session_pack {
+  background: rgba(255, 176, 32, 0.15);
+  color: var(--warn);
+}
+
+.plan-type-badge.family {
+  background: rgba(255, 92, 92, 0.15);
+  color: var(--danger);
+}
+
+.plan-name {
+  font-size: 20px;
+  margin: 0 0 8px 0;
+}
+
+.plan-price {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+.plan-details {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
