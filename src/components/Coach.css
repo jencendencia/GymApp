@@ -1,0 +1,363 @@
+.coach-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+  overflow: hidden;
+}
+
+/* Sub-tabs */
+.coach-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.coach-tab {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: -1px;
+}
+
+.coach-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.coach-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Registration Section */
+.coach-registration-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Members Section */
+.coach-members-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.coach-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.coach-selector label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.coach-selector .input {
+  max-width: 320px;
+}
+
+/* Table */
+.coach-table-container {
+  flex: 1;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.coach-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.coach-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  padding: 14px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+}
+
+.coach-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.coach-table tbody tr {
+  transition: background 0.15s;
+}
+
+.coach-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.coach-name {
+  font-weight: 500;
+}
+
+.coach-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* Empty state */
+.coach-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-faint);
+}
+
+.coach-empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.coach-empty-state p {
+  font-size: 14px;
+}
+
+/* Reuse modal styles from Members */
+.coach-page .modal {
+  width: 500px;
+}
+
+.coach-page .form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.coach-page .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.coach-page .form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.coach-page .form-group .input {
+  width: 100%;
+}
+
+/* Fee status badges */
+.fee-status {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.fee-status.paid {
+  color: var(--accent);
+}
+
+.fee-amount {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.text-faint {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* Fee modal header with summary */
+.modal-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-header-left h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.fee-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Fee payment modal - much wider */
+.coach-page .modal-fee {
+  width: 960px;
+  max-width: 90vw;
+}
+
+/* Fee form grid: member gets most space, amount gets good width, notes and button get the rest */
+.fee-form-grid {
+  display: grid !important;
+  grid-template-columns: 3fr 1.2fr 1.8fr auto !important;
+  gap: 16px;
+  align-items: end;
+}
+
+.fee-form-grid .form-group:first-child {
+  min-width: 0;
+}
+
+/* Payment Tracking Section */
+.payment-tracking-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.payment-tracking-filters {
+  display: flex;
+  gap: 20px;
+  align-items: end;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.filter-group .input {
+  min-width: 260px;
+}
+
+.filter-group input[type="date"] {
+  min-width: 200px;
+}
+
+/* Summary cards */
+.payment-summary-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.summary-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.2s;
+}
+
+.summary-card:hover {
+  border-color: var(--text-faint);
+}
+
+.summary-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summary-value {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.summary-value.accent {
+  color: var(--accent);
+}
+
+.summary-count {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* Payment tracking list */
+.payment-tracking-list .section-label {
+  margin-bottom: 12px;
+}
+
+.payment-tracking-list {
+  flex-shrink: 0;
+}
+
+/* Fee payment form */
+.fee-payment-form {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.fee-payment-form .section-label {
+  margin-bottom: 16px;
+}
+
+/* Payment history table - wider columns */
+.fee-payment-history .coach-table th:first-child,
+.fee-payment-history .coach-table td:first-child {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.fee-payment-history .coach-table th:nth-child(2),
+.fee-payment-history .coach-table td:nth-child(2) {
+  min-width: 200px;
+}
+
+.fee-payment-history .coach-table th:nth-child(3),
+.fee-payment-history .coach-table td:nth-child(3) {
+  width: 130px;
+  white-space: nowrap;
+}
+
+.fee-payment-history .coach-table th:last-child,
+.fee-payment-history .coach-table td:last-child {
+  min-width: 150px;
+}

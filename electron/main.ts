@@ -30,6 +30,16 @@ function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS coaches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      specialty TEXT,
+      professional_fee REAL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS members (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       member_id TEXT UNIQUE NOT NULL,
@@ -42,11 +52,18 @@ function initDatabase() {
       plan_id INTEGER,
       plan_start DATE,
       plan_end DATE,
+      height REAL,
+      weight REAL,
+      birthday DATE,
+      coach_id INTEGER,
+      coaching_start DATE,
+      coaching_end DATE,
       sessions_used INTEGER DEFAULT 0,
       balance REAL DEFAULT 0,
       status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'expired')),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (plan_id) REFERENCES plans(id)
+      FOREIGN KEY (plan_id) REFERENCES plans(id),
+      FOREIGN KEY (coach_id) REFERENCES coaches(id)
     );
 
     CREATE TABLE IF NOT EXISTS fingerprint_templates (
@@ -79,6 +96,17 @@ function initDatabase() {
       FOREIGN KEY (plan_id) REFERENCES plans(id)
     );
 
+    CREATE TABLE IF NOT EXISTS coach_fee_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coach_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (coach_id) REFERENCES coaches(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
     CREATE TABLE IF NOT EXISTS staff (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -87,6 +115,24 @@ function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `)
+
+  // Migrate existing databases: add columns if they don't exist
+  const columnsToAdd = [
+    { table: 'members', column: 'height', def: 'REAL DEFAULT NULL' },
+    { table: 'members', column: 'weight', def: 'REAL DEFAULT NULL' },
+    { table: 'members', column: 'birthday', def: 'DATE DEFAULT NULL' },
+    { table: 'members', column: 'coach_id', def: 'INTEGER DEFAULT NULL REFERENCES coaches(id)' },
+    { table: 'members', column: 'coaching_start', def: 'DATE DEFAULT NULL' },
+    { table: 'members', column: 'coaching_end', def: 'DATE DEFAULT NULL' },
+    { table: 'coaches', column: 'professional_fee', def: 'REAL DEFAULT 0' },
+  ]
+  for (const col of columnsToAdd) {
+    try {
+      db!.exec(`ALTER TABLE ${col.table} ADD COLUMN ${col.column} ${col.def}`)
+    } catch {
+      // Column already exists — ignore
+    }
+  }
 
   return db
 }
@@ -115,15 +161,25 @@ function createWindow() {
   }
 }
 
+// Auto-expire members whose plan_end has passed
+function autoExpireMembers() {
+  db?.prepare(`
+    UPDATE members SET status = 'inactive'
+    WHERE plan_end IS NOT NULL AND plan_end < date('now') AND status = 'active'
+  `).run()
+}
+
 // IPC Handlers
 function setupIPC() {
   // Members
   ipcMain.handle('get-members', async () => {
     try {
+      autoExpireMembers()
       return db?.prepare(`
-        SELECT m.*, p.name as plan_name
+        SELECT m.*, p.name as plan_name, c.name as coach_name
         FROM members m
         LEFT JOIN plans p ON m.plan_id = p.id
+        LEFT JOIN coaches c ON m.coach_id = c.id
       `).all() || []
     } catch (error) {
       console.error('get-members error:', error)
@@ -132,18 +188,20 @@ function setupIPC() {
   })
 
   ipcMain.handle('get-member', (_, id: number) => {
+    autoExpireMembers()
     return db?.prepare(`
-      SELECT m.*, p.name as plan_name
+      SELECT m.*, p.name as plan_name, c.name as coach_name
       FROM members m
       LEFT JOIN plans p ON m.plan_id = p.id
+      LEFT JOIN coaches c ON m.coach_id = c.id
       WHERE m.id = ?
     `).get(id)
   })
 
   ipcMain.handle('create-member', (_, member) => {
     return db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, balance)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -155,13 +213,19 @@ function setupIPC() {
       member.plan_id,
       member.plan_start,
       member.plan_end,
+      member.height ?? null,
+      member.weight ?? null,
+      member.birthday || null,
+      member.coach_id || null,
+      member.coaching_start || null,
+      member.coaching_end || null,
       member.balance
     )
   })
 
   ipcMain.handle('update-member', (_, id: number, member) => {
     return db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, balance = ?, status = ?
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?
       WHERE id = ?
     `).run(
       member.name,
@@ -173,6 +237,12 @@ function setupIPC() {
       member.plan_id,
       member.plan_start,
       member.plan_end,
+      member.height ?? null,
+      member.weight ?? null,
+      member.birthday || null,
+      member.coach_id || null,
+      member.coaching_start || null,
+      member.coaching_end,
       member.balance,
       member.status,
       id
@@ -184,10 +254,12 @@ function setupIPC() {
   })
 
   ipcMain.handle('search-members', (_, query: string) => {
+    autoExpireMembers()
     return db?.prepare(`
-      SELECT m.*, p.name as plan_name
+      SELECT m.*, p.name as plan_name, c.name as coach_name
       FROM members m
       LEFT JOIN plans p ON m.plan_id = p.id
+      LEFT JOIN coaches c ON m.coach_id = c.id
       WHERE m.name LIKE ? OR m.member_id LIKE ? OR m.email LIKE ?
     `).all(`%${query}%`, `%${query}%`, `%${query}%`)
   })
@@ -243,6 +315,7 @@ function setupIPC() {
   })
 
   ipcMain.handle('get-today-stats', () => {
+    autoExpireMembers()
     const today = new Date().toISOString().split('T')[0]
     const totalCheckins = db?.prepare(`
       SELECT COUNT(*) as count FROM checkins WHERE DATE(timestamp) = ?
@@ -271,11 +344,13 @@ function setupIPC() {
   })
 
   ipcMain.handle('get-expiring-soon', () => {
+    autoExpireMembers()
     const today = new Date().toISOString().split('T')[0]
     return db?.prepare(`
-      SELECT m.*, p.name as plan_name
+      SELECT m.*, p.name as plan_name, c.name as coach_name
       FROM members m
       LEFT JOIN plans p ON m.plan_id = p.id
+      LEFT JOIN coaches c ON m.coach_id = c.id
       WHERE m.plan_end BETWEEN ? AND date(?, '+7 days')
       AND m.status = 'active'
       ORDER BY m.plan_end ASC
@@ -340,6 +415,116 @@ function setupIPC() {
     `).run(payment.member_id, payment.amount, payment.type, payment.plan_id)
   })
 
+  // Coaches
+  ipcMain.handle('get-coaches', () => {
+    return db?.prepare('SELECT * FROM coaches ORDER BY name ASC').all()
+  })
+
+  ipcMain.handle('get-coach', (_, id: number) => {
+    return db?.prepare('SELECT * FROM coaches WHERE id = ?').get(id)
+  })
+
+  ipcMain.handle('create-coach', (_, coach) => {
+    return db?.prepare(`
+      INSERT INTO coaches (name, email, phone, specialty, professional_fee)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0)
+  })
+
+  ipcMain.handle('update-coach', (_, id: number, coach) => {
+    return db?.prepare(`
+      UPDATE coaches SET name = ?, email = ?, phone = ?, specialty = ?, professional_fee = ?
+      WHERE id = ?
+    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0, id)
+  })
+
+  ipcMain.handle('delete-coach', (_, id: number) => {
+    // Unassign members from this coach before deleting
+    db?.prepare('UPDATE members SET coach_id = NULL WHERE coach_id = ?').run(id)
+    return db?.prepare('DELETE FROM coaches WHERE id = ?').run(id)
+  })
+
+  ipcMain.handle('get-coach-members', (_, coachId: number) => {
+    autoExpireMembers()
+    return db?.prepare(`
+      SELECT m.*, p.name as plan_name, c.name as coach_name
+      FROM members m
+      LEFT JOIN plans p ON m.plan_id = p.id
+      LEFT JOIN coaches c ON m.coach_id = c.id
+      WHERE m.coach_id = ?
+      ORDER BY m.name ASC
+    `).all(coachId)
+  })
+
+  // Coach Fee Payments
+  ipcMain.handle('get-coach-fee-payments', (_, coachId: number) => {
+    return db?.prepare(`
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code, c.name as coach_name
+      FROM coach_fee_payments cfp
+      JOIN members m ON cfp.member_id = m.id
+      JOIN coaches c ON cfp.coach_id = c.id
+      WHERE cfp.coach_id = ?
+      ORDER BY cfp.created_at DESC
+    `).all(coachId)
+  })
+
+  ipcMain.handle('create-coach-fee-payment', (_, payment) => {
+    return db?.prepare(`
+      INSERT INTO coach_fee_payments (coach_id, member_id, amount, notes)
+      VALUES (?, ?, ?, ?)
+    `).run(payment.coach_id, payment.member_id, payment.amount, payment.notes || null)
+  })
+
+  ipcMain.handle('get-coach-fee-collected', (_, coachId: number) => {
+    const result = db?.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM coach_fee_payments
+      WHERE coach_id = ?
+    `).get(coachId) as any
+    return result?.total || 0
+  })
+
+  // Coach Payment Tracking
+  ipcMain.handle('get-coach-payments-by-date', (_, coachId: number, date: string) => {
+    const payments = db?.prepare(`
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code
+      FROM coach_fee_payments cfp
+      JOIN members m ON cfp.member_id = m.id
+      WHERE cfp.coach_id = ? AND DATE(cfp.created_at) = ?
+      ORDER BY cfp.created_at DESC
+    `    ).all(coachId, date) as any[]
+
+    const totalRow = db?.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM coach_fee_payments
+      WHERE coach_id = ? AND DATE(created_at) = ?
+    `).get(coachId, date) as any
+
+    return {
+      payments: payments || [],
+      dailyTotal: totalRow?.total || 0,
+    }
+  })
+
+  ipcMain.handle('get-coach-monthly-total', (_, coachId: number, date: string) => {
+    const result = db?.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM coach_fee_payments
+      WHERE coach_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', ?)
+    `).get(coachId, date) as any
+    return result?.total || 0
+  })
+
+  ipcMain.handle('get-coach-monthly-payments', (_, coachId: number, date: string) => {
+    return db?.prepare(`
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code
+      FROM coach_fee_payments cfp
+      JOIN members m ON cfp.member_id = m.id
+      WHERE cfp.coach_id = ? AND strftime('%Y-%m', cfp.created_at) = strftime('%Y-%m', ?)
+      ORDER BY cfp.created_at DESC
+    `).all(coachId, date) || []
+  })
+
   // Settings
   ipcMain.handle('get-settings', () => {
     const rows = db?.prepare('SELECT * FROM settings').all() as any[] || []
@@ -377,6 +562,7 @@ function setupIPC() {
         checkins: db.prepare('SELECT * FROM checkins').all() as any[],
         fingerprint_templates: db.prepare('SELECT * FROM fingerprint_templates').all() as any[],
         payments: db.prepare('SELECT * FROM payments').all() as any[],
+        coaches: db.prepare('SELECT * FROM coaches').all() as any[],
         settings: db.prepare('SELECT * FROM settings').all() as any[],
       }
 
@@ -486,6 +672,7 @@ function setupIPC() {
         db!.exec('DELETE FROM payments')
         db!.exec('DELETE FROM members')
         db!.exec('DELETE FROM plans')
+        db!.exec('DELETE FROM coaches')
         db!.exec('DELETE FROM settings')
 
         // Helper to insert rows dynamically (preserves original IDs)
@@ -502,6 +689,7 @@ function setupIPC() {
 
         // Restore: insert in order respecting FK constraints
         if (deserialized.plans) insertRows('plans', deserialized.plans)
+        if (deserialized.coaches) insertRows('coaches', deserialized.coaches)
         if (deserialized.members) insertRows('members', deserialized.members)
         if (deserialized.checkins) insertRows('checkins', deserialized.checkins)
         if (deserialized.fingerprint_templates) insertRows('fingerprint_templates', deserialized.fingerprint_templates)
@@ -538,6 +726,7 @@ app.whenReady().then(() => {
     console.log('Starting REPCHECK...')
     initDatabase()
     console.log('Database initialized successfully')
+    autoExpireMembers()
     setupIPC()
     console.log('IPC handlers set up')
     createWindow()

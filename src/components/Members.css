@@ -10,8 +10,76 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   flex-shrink: 0;
+}
+
+/* Member sub-tabs */
+.member-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.member-tab {
+  position: relative;
+  padding: 10px 24px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.member-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.member-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.expiring-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  line-height: 1;
+}
+
+/* Days left styles */
+.days-left {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.days-danger {
+  color: var(--danger);
+}
+
+.days-warning {
+  color: var(--warn);
 }
 
 .page-title {
@@ -98,6 +166,11 @@
   text-align: center;
   color: var(--text-faint);
   padding: 40px !important;
+}
+
+.table-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .btn-icon {

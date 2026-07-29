@@ -7,9 +7,10 @@ import Members from './components/Members'
 import Plans from './components/Plans'
 import Checkins from './components/Checkins'
 import Settings from './components/Settings'
+import Coach from './components/Coach'
 import { Member, TodayStats, Checkin } from './types/electron'
 
-type Screen = 'kiosk' | 'members' | 'plans' | 'checkins' | 'reports' | 'settings'
+type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'reports' | 'settings'
 
 function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
@@ -86,6 +87,8 @@ function App() {
         return <Kiosk onRefresh={loadData} />
       case 'members':
         return <Members />
+      case 'coach':
+        return <Coach />
       case 'plans':
         return <Plans />
       case 'checkins':

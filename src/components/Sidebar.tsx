@@ -11,6 +11,7 @@ interface SidebarProps {
 const navItems = [
   { id: 'kiosk', label: 'Dashboard', icon: '◉' },
   { id: 'members', label: 'Members', icon: '👥' },
+  { id: 'coach', label: 'Coach', icon: '🏋️' },
   { id: 'plans', label: 'Plans', icon: '📋' },
   { id: 'checkins', label: 'Check-ins', icon: '📊' },
   { id: 'reports', label: 'Reports', icon: '📈' },

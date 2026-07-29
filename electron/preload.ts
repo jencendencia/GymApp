@@ -44,6 +44,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createBackup: () => ipcRenderer.invoke('create-backup'),
   restoreBackup: () => ipcRenderer.invoke('restore-backup'),
 
+  // Coaches
+  getCoaches: () => ipcRenderer.invoke('get-coaches'),
+  getCoach: (id: number) => ipcRenderer.invoke('get-coach', id),
+  createCoach: (coach: any) => ipcRenderer.invoke('create-coach', coach),
+  updateCoach: (id: number, coach: any) => ipcRenderer.invoke('update-coach', id, coach),
+  deleteCoach: (id: number) => ipcRenderer.invoke('delete-coach', id),
+  getCoachMembers: (coachId: number) => ipcRenderer.invoke('get-coach-members', coachId),
+
+  // Coach Fee Payments
+  getCoachFeePayments: (coachId: number) => ipcRenderer.invoke('get-coach-fee-payments', coachId),
+  createCoachFeePayment: (payment: any) => ipcRenderer.invoke('create-coach-fee-payment', payment),
+  getCoachFeeCollected: (coachId: number) => ipcRenderer.invoke('get-coach-fee-collected', coachId),
+
+  // Coach Payment Tracking
+  getCoachPaymentsByDate: (coachId: number, date: string) =>
+    ipcRenderer.invoke('get-coach-payments-by-date', coachId, date),
+  getCoachMonthlyTotal: (coachId: number, date: string) =>
+    ipcRenderer.invoke('get-coach-monthly-total', coachId, date),
+  getCoachMonthlyPayments: (coachId: number, date: string) =>
+    ipcRenderer.invoke('get-coach-monthly-payments', coachId, date),
+
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),

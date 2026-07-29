@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './Members.css'
-import { Member, Plan } from '../types/electron'
+import { Member, Plan, Coach } from '../types/electron'
 
 interface FingerprintState {
   scanning: boolean
@@ -12,7 +12,9 @@ interface FingerprintState {
 function Members() {
   const [members, setMembers] = useState<Member[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
+  const [coaches, setCoaches] = useState<Coach[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [memberTab, setMemberTab] = useState<'all' | 'expiring'>('all')
   const [selectedMember, setSelectedMember] = useState<Member | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
@@ -24,6 +26,14 @@ function Members() {
   })
   const fileInputRef = useRef<HTMLInputElement>(null)
   
+  const [newPlanMember, setNewPlanMember] = useState<Member | null>(null)
+  const [showNewPlanModal, setShowNewPlanModal] = useState(false)
+  const [newPlanData, setNewPlanData] = useState({
+    plan_id: 0,
+    plan_start: '',
+    plan_end: '',
+  })
+
   const [formData, setFormData] = useState({
     member_id: '',
     name: '',
@@ -34,6 +44,12 @@ function Members() {
     plan_id: 0,
     plan_start: '',
     plan_end: '',
+    height: '',
+    weight: '',
+    birthday: '',
+    coach_id: 0,
+    coaching_start: '',
+    coaching_end: '',
     balance: 0,
     status: 'active' as 'active' | 'inactive' | 'expired',
     photo: ''
@@ -41,6 +57,7 @@ function Members() {
 
   useEffect(() => {
     loadPlans()
+    loadCoaches()
   }, [])
 
   const loadMembers = async () => {
@@ -60,6 +77,15 @@ function Members() {
       setPlans(data)
     } catch (error) {
       console.error('Failed to load plans:', error)
+    }
+  }
+
+  const loadCoaches = async () => {
+    try {
+      const data = await window.electronAPI.getCoaches()
+      setCoaches(data)
+    } catch (error) {
+      console.error('Failed to load coaches:', error)
     }
   }
 
@@ -194,6 +220,12 @@ function Members() {
         plan_id: formData.plan_id || undefined,
         plan_start: formData.plan_start || undefined,
         plan_end: formData.plan_end || undefined,
+        height: formData.height ? Number(formData.height) : undefined,
+        weight: formData.weight ? Number(formData.weight) : undefined,
+        birthday: formData.birthday || undefined,
+        coach_id: formData.coach_id || undefined,
+        coaching_start: formData.coaching_start || undefined,
+        coaching_end: formData.coaching_end || undefined,
         balance: formData.balance || 0,
       })
       
@@ -224,6 +256,12 @@ function Members() {
         plan_id: formData.plan_id || undefined,
         plan_start: formData.plan_start || undefined,
         plan_end: formData.plan_end || undefined,
+        height: formData.height ? Number(formData.height) : undefined,
+        weight: formData.weight ? Number(formData.weight) : undefined,
+        birthday: formData.birthday || undefined,
+        coach_id: formData.coach_id || undefined,
+        coaching_start: formData.coaching_start || undefined,
+        coaching_end: formData.coaching_end || undefined,
         balance: formData.balance || 0,
         status: formData.status,
       })
@@ -254,7 +292,19 @@ function Members() {
     }
   }
 
+  const getDefaultStartDate = () => {
+    return new Date().toISOString().split('T')[0]
+  }
+
+  const getDefaultEndDate = () => {
+    const d = new Date()
+    d.setDate(d.getDate() + 30)
+    return d.toISOString().split('T')[0]
+  }
+
   const resetForm = () => {
+    const today = getDefaultStartDate()
+    const twoMonths = getDefaultEndDate()
     setFormData({
       member_id: '',
       name: '',
@@ -263,8 +313,14 @@ function Members() {
       emergency_contact: '',
       emergency_phone: '',
       plan_id: 0,
-      plan_start: '',
-      plan_end: '',
+      plan_start: today,
+      plan_end: twoMonths,
+      height: '',
+      weight: '',
+      birthday: '',
+      coach_id: 0,
+      coaching_start: today,
+      coaching_end: twoMonths,
       balance: 0,
       status: 'active',
       photo: ''
@@ -275,6 +331,59 @@ function Members() {
 
   const generateMemberId = () => {
     return 'MEM-' + Date.now().toString(36).toUpperCase()
+  }
+
+  const openNewPlanModal = (member: Member) => {
+    setNewPlanMember(member)
+    const today = getDefaultStartDate()
+    const baseEnd = getDefaultEndDate()
+    // Calculate carryover in the frontend: add remaining days from current plan to new end date
+    const remaining = calcDaysRemaining(member.plan_end)
+    let finalEnd = baseEnd
+    if (remaining && remaining > 0) {
+      const d = new Date(baseEnd)
+      d.setDate(d.getDate() + remaining)
+      finalEnd = d.toISOString().split('T')[0]
+    }
+    setNewPlanData({
+      plan_id: 0,
+      plan_start: today,
+      plan_end: finalEnd,
+    })
+    setShowNewPlanModal(true)
+  }
+
+  const handleNewPlanSave = async () => {
+    if (!newPlanMember || !newPlanData.plan_id) {
+      alert('Please select a plan before assigning.')
+      return
+    }
+    try {
+      await window.electronAPI.updateMember(newPlanMember.id, {
+        name: newPlanMember.name,
+        email: newPlanMember.email || undefined,
+        phone: newPlanMember.phone || undefined,
+        photo: newPlanMember.photo || undefined,
+        emergency_contact: newPlanMember.emergency_contact || undefined,
+        emergency_phone: newPlanMember.emergency_phone || undefined,
+        plan_id: newPlanData.plan_id,
+        plan_start: newPlanData.plan_start,
+        plan_end: newPlanData.plan_end,
+        height: newPlanMember.height,
+        weight: newPlanMember.weight,
+        birthday: newPlanMember.birthday || undefined,
+        coach_id: newPlanMember.coach_id || undefined,
+        coaching_start: newPlanMember.coaching_start || undefined,
+        coaching_end: newPlanMember.coaching_end || undefined,
+        balance: newPlanMember.balance || 0,
+        status: newPlanMember.status,
+      })
+      setShowNewPlanModal(false)
+      setNewPlanMember(null)
+      loadMembers()
+    } catch (error) {
+      console.error('Failed to update plan:', error)
+    }
   }
 
   const openEditForm = (member: Member) => {
@@ -289,6 +398,12 @@ function Members() {
       plan_id: member.plan_id || 0,
       plan_start: member.plan_start || '',
       plan_end: member.plan_end || '',
+      height: member.height ? String(member.height) : '',
+      weight: member.weight ? String(member.weight) : '',
+      birthday: member.birthday || '',
+      coach_id: member.coach_id || 0,
+      coaching_start: member.coaching_start || '',
+      coaching_end: member.coaching_end || '',
       balance: member.balance || 0,
       status: member.status,
       photo: member.photo || ''
@@ -302,6 +417,26 @@ function Members() {
     const plan = plans.find(p => p.id === planId)
     return plan?.name || 'Unknown'
   }
+
+  const calcDaysRemaining = (dateStr?: string): number | null => {
+    if (!dateStr) return null
+    const now = new Date()
+    const end = new Date(dateStr)
+    const diff = end.getTime() - now.getTime()
+    return Math.ceil(diff / (1000 * 60 * 60 * 24))
+  }
+
+  const isExpiring = (member: Member): boolean => {
+    const daysPlan = calcDaysRemaining(member.plan_end)
+    const daysCoaching = calcDaysRemaining(member.coaching_end)
+    const days = Math.min(
+      daysPlan ?? Infinity,
+      daysCoaching ?? Infinity
+    )
+    return days <= 2 && days >= 0
+  }
+
+  const expiringMembers = members.filter(isExpiring)
 
   return (
     <div className="members-page">
@@ -325,6 +460,23 @@ function Members() {
         </div>
       </div>
 
+      {/* Sub-tabs */}
+      <div className="member-tabs">
+        <button
+          className={`member-tab ${memberTab === 'all' ? 'active' : ''}`}
+          onClick={() => setMemberTab('all')}
+        >
+          All Members
+        </button>
+        <button
+          className={`member-tab ${memberTab === 'expiring' ? 'active' : ''}`}
+          onClick={() => setMemberTab('expiring')}
+        >
+          Expiring Members {expiringMembers.length > 0 && <span className="expiring-badge">{expiringMembers.length}</span>}
+        </button>
+      </div>
+
+      {memberTab === 'all' && (
       <div className="members-table-container">
         <table className="members-table">
           <thead>
@@ -333,9 +485,9 @@ function Members() {
               <th>Member ID</th>
               <th>Name</th>
               <th>Plan</th>
-              <th>Status</th>
-              <th>Balance</th>
+              <th>Status</th>              <th>Balance</th>
               <th>Expiry</th>
+              <th>Days Left</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -368,17 +520,38 @@ function Members() {
                       ? new Date(member.plan_end).toLocaleDateString()
                       : 'N/A'}
                   </td>
+                  <td className="mono-text">
+                    {(() => {
+                      const d = calcDaysRemaining(member.plan_end) ?? calcDaysRemaining(member.coaching_end)
+                      if (d === null || d === undefined) return '—'
+                      if (d <= 0) return <span className="status-badge expired">Expired</span>
+                      if (d <= 2) return <span className="days-left days-danger">{d} day{d !== 1 ? 's' : ''}</span>
+                      return <span className="days-left">{d} days</span>
+                    })()}
+                  </td>
                   <td>
-                    <button
-                      className="btn-icon danger"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDelete(member.id)
-                      }}
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
+                    <div className="table-actions">
+                      <button
+                        className="btn-icon"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openNewPlanModal(member)
+                        }}
+                        title="New Plan"
+                      >
+                        📋
+                      </button>
+                      <button
+                        className="btn-icon danger"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDelete(member.id)
+                        }}
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -386,6 +559,156 @@ function Members() {
           </tbody>
         </table>
       </div>
+      )}
+
+      {memberTab === 'expiring' && (
+        <div className="members-table-container">
+          <table className="members-table">
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Member ID</th>
+                <th>Name</th>
+                <th>Plan</th>
+                <th>Expiry Date</th>
+                <th>Days Left</th>
+                <th>Status</th>                      <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {expiringMembers.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="empty-row">No expiring members</td>
+              </tr>
+            ) : (
+              expiringMembers.map((member) => {
+                  // Show whichever end date is expiring sooner
+                  const planDays = calcDaysRemaining(member.plan_end)
+                  const coachDays = calcDaysRemaining(member.coaching_end)
+                  const usePlan = (planDays ?? Infinity) <= (coachDays ?? Infinity)
+                  const daysLeft = usePlan ? (planDays ?? 0) : (coachDays ?? 0)
+                  const expiryDate = usePlan ? (member.plan_end || '') : (member.coaching_end || '')
+                  return (
+                    <tr key={member.id} onClick={() => openEditForm(member)}>
+                      <td>
+                        {member.photo ? (
+                          <img src={member.photo} alt={member.name} className="member-table-photo" />
+                        ) : (
+                          <div className="member-table-avatar">{member.name.charAt(0)}</div>
+                        )}
+                      </td>
+                      <td className="mono-text">{member.member_id}</td>
+                      <td>{member.name}</td>
+                      <td>{getPlanName(member.plan_id)}</td>
+                      <td className="mono-text">
+                        {expiryDate ? new Date(expiryDate).toLocaleDateString() : 'N/A'}
+                      </td>
+                      <td className="mono-text">
+                        {daysLeft <= 0 ? (
+                          <span className="status-badge expired">Expired</span>
+                        ) : daysLeft === 1 ? (
+                          <span className="days-left days-danger">{daysLeft} day</span>
+                        ) : (
+                          <span className="days-left days-warning">{daysLeft} days</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`status-badge ${member.status}`}>
+                          {member.status}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            className="btn-icon"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openNewPlanModal(member)
+                            }}
+                            title="New Plan"
+                          >
+                            📋
+                          </button>
+                          <button
+                            className="btn-icon danger"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDelete(member.id)
+                            }}
+                            title="Delete"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* New Plan Modal */}
+      {showNewPlanModal && newPlanMember && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">New Plan — {newPlanMember.name}</h2>
+              <button className="btn-icon" onClick={() => setShowNewPlanModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Plan</label>
+                  <select
+                    className="input"
+                    value={newPlanData.plan_id}
+                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_id: Number(e.target.value) })}
+                  >
+                    <option value={0}>No plan</option>
+                    {plans.map((plan) => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name} (₱{plan.price})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Plan Start</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={newPlanData.plan_start}
+                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_start: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Plan End</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={newPlanData.plan_end}
+                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_end: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowNewPlanModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleNewPlanSave}
+              >
+                Assign Plan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <div className="modal-overlay">
@@ -567,6 +890,70 @@ function Members() {
                         value={formData.balance}
                         onChange={(e) => setFormData({ ...formData, balance: Number(e.target.value) })}
                         step="0.01"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Height (cm)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        value={formData.height}
+                        onChange={(e) => setFormData({ ...formData, height: e.target.value })}
+                        placeholder="e.g. 175"
+                        step="0.1"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Weight (kg)</label>
+                      <input
+                        type="number"
+                        className="input"
+                        value={formData.weight}
+                        onChange={(e) => setFormData({ ...formData, weight: e.target.value })}
+                        placeholder="e.g. 75"
+                        step="0.1"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Birthday</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={formData.birthday}
+                        onChange={(e) => setFormData({ ...formData, birthday: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Coach</label>
+                      <select
+                        className="input"
+                        value={formData.coach_id}
+                        onChange={(e) => setFormData({ ...formData, coach_id: Number(e.target.value) })}
+                      >
+                        <option value={0}>No coach</option>
+                        {coaches.map((coach) => (
+                          <option key={coach.id} value={coach.id}>
+                            {coach.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Coaching Start</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={formData.coaching_start}
+                        onChange={(e) => setFormData({ ...formData, coaching_start: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Coaching End</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={formData.coaching_end}
+                        onChange={(e) => setFormData({ ...formData, coaching_end: e.target.value })}
                       />
                     </div>
                     <div className="form-group">

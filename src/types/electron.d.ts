@@ -36,6 +36,24 @@ export interface ElectronAPI {
   getPayments: (memberId?: number) => Promise<Payment[]>
   createPayment: (payment: CreatePaymentInput) => Promise<any>
 
+  // Coaches
+  getCoaches: () => Promise<Coach[]>
+  getCoach: (id: number) => Promise<Coach>
+  createCoach: (coach: CreateCoachInput) => Promise<any>
+  updateCoach: (id: number, coach: CreateCoachInput) => Promise<any>
+  deleteCoach: (id: number) => Promise<any>
+  getCoachMembers: (coachId: number) => Promise<Member[]>
+
+  // Coach Fee Payments
+  getCoachFeePayments: (coachId: number) => Promise<CoachFeePayment[]>
+  createCoachFeePayment: (payment: CreateCoachFeePaymentInput) => Promise<any>
+  getCoachFeeCollected: (coachId: number) => Promise<number>
+
+  // Coach Payment Tracking
+  getCoachPaymentsByDate: (coachId: number, date: string) => Promise<{ payments: CoachFeePayment[]; dailyTotal: number }>
+  getCoachMonthlyTotal: (coachId: number, date: string) => Promise<number>
+  getCoachMonthlyPayments: (coachId: number, date: string) => Promise<CoachFeePayment[]>
+
   // Backup & Restore
   createBackup: () => Promise<{ success: boolean; path?: string; reason?: string }>
   restoreBackup: () => Promise<{ success: boolean; reason?: string }>
@@ -45,6 +63,24 @@ export interface ElectronAPI {
   getSetting: (key: string) => Promise<string | null>
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
+}
+
+export interface Coach {
+  id: number
+  name: string
+  email?: string
+  phone?: string
+  specialty?: string
+  professional_fee?: number
+  created_at: string
+}
+
+export interface CreateCoachInput {
+  name: string
+  email?: string
+  phone?: string
+  specialty?: string
+  professional_fee?: number
 }
 
 export interface Member {
@@ -59,11 +95,18 @@ export interface Member {
   plan_id?: number
   plan_start?: string
   plan_end?: string
+  height?: number
+  weight?: number
+  birthday?: string
+  coach_id?: number
+  coaching_start?: string
+  coaching_end?: string
   sessions_used: number
   balance: number
   status: 'active' | 'inactive' | 'expired'
   created_at: string
   plan_name?: string
+  coach_name?: string
 }
 
 export interface CreateMemberInput {
@@ -77,6 +120,12 @@ export interface CreateMemberInput {
   plan_id?: number
   plan_start?: string
   plan_end?: string
+  height?: number
+  weight?: number
+  birthday?: string
+  coach_id?: number
+  coaching_start?: string
+  coaching_end?: string
   balance?: number
 }
 
@@ -90,6 +139,12 @@ export interface UpdateMemberInput {
   plan_id?: number
   plan_start?: string
   plan_end?: string
+  height?: number
+  weight?: number
+  birthday?: string
+  coach_id?: number
+  coaching_start?: string
+  coaching_end?: string
   balance?: number
   status?: 'active' | 'inactive' | 'expired'
 }
@@ -155,6 +210,25 @@ export interface CreatePaymentInput {
   amount: number
   type: 'new_plan' | 'renewal' | 'top_up'
   plan_id?: number
+}
+
+export interface CoachFeePayment {
+  id: number
+  coach_id: number
+  member_id: number
+  amount: number
+  notes?: string
+  created_at: string
+  member_name?: string
+  member_code?: string
+  coach_name?: string
+}
+
+export interface CreateCoachFeePaymentInput {
+  coach_id: number
+  member_id: number
+  amount: number
+  notes?: string
 }
 
 export interface TodayStats {
