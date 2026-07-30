@@ -10,6 +10,7 @@ interface SettingsState {
   showMemberPhotos: boolean
   enableNotifications: boolean
   appLogo: string
+  kioskLogo: string
 }
 
 type UpdateStatusState =
@@ -36,6 +37,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
     showMemberPhotos: true,
     enableNotifications: true,
     appLogo: '',
+    kioskLogo: '',
   })
   const [saved, setSaved] = useState(false)
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
@@ -55,6 +57,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       if (data.showMemberPhotos) setSettings(prev => ({ ...prev, showMemberPhotos: data.showMemberPhotos === 'true' }))
       if (data.enableNotifications) setSettings(prev => ({ ...prev, enableNotifications: data.enableNotifications === 'true' }))
       if (data.appLogo) setSettings(prev => ({ ...prev, appLogo: data.appLogo }))
+      if (data.kioskLogo) setSettings(prev => ({ ...prev, kioskLogo: data.kioskLogo }))
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
@@ -70,6 +73,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
         showMemberPhotos: settings.showMemberPhotos.toString(),
         enableNotifications: settings.enableNotifications.toString(),
         appLogo: settings.appLogo,
+        kioskLogo: settings.kioskLogo,
       })
       setSaved(true)
       if (onAppNameChange) onAppNameChange(settings.appName)
@@ -115,6 +119,33 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       await window.electronAPI.saveSetting('appLogo', '')
     } catch (error) {
       console.error('Failed to remove logo:', error)
+    }
+  }
+
+  // ── Kiosk Logo handlers ──
+  const handleKioskLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onloadend = async () => {
+      const base64 = reader.result as string
+      setSettings(prev => ({ ...prev, kioskLogo: base64 }))
+      try {
+        await window.electronAPI.saveSetting('kioskLogo', base64)
+      } catch (error) {
+        console.error('Failed to save kiosk logo:', error)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleRemoveKioskLogo = async () => {
+    setSettings(prev => ({ ...prev, kioskLogo: '' }))
+    try {
+      await window.electronAPI.saveSetting('kioskLogo', '')
+    } catch (error) {
+      console.error('Failed to remove kiosk logo:', error)
     }
   }
 
@@ -256,6 +287,41 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
                     type="file"
                     accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif,image/ico"
                     onChange={handleLogoUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="setting-item logo-setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Kiosk Logo</span>
+                <span className="setting-description">Large logo displayed on the kiosk check-in screen</span>
+              </div>
+              <div className="logo-upload-area">
+                {settings.kioskLogo ? (
+                  <div className="kiosk-logo-preview-wrapper">
+                    <img src={settings.kioskLogo} alt="Kiosk Logo" className="kiosk-logo-preview" />
+                    <button
+                      type="button"
+                      className="btn-icon logo-remove-btn"
+                      onClick={handleRemoveKioskLogo}
+                      title="Remove kiosk logo"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <div className="kiosk-logo-placeholder">
+                    <span className="logo-placeholder-icon">🏢</span>
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm logo-upload-btn">
+                  {settings.kioskLogo ? 'Change' : 'Upload'}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+                    onChange={handleKioskLogoUpload}
                     style={{ display: 'none' }}
                   />
                 </label>

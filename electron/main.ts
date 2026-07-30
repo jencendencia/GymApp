@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron'
 import path from 'path'
 import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
 import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
+let kioskWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
 
 function initDatabase() {
@@ -177,6 +178,96 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+
+  // If the main window closes, also close the kiosk window
+  mainWindow.on('closed', () => {
+    if (kioskWindow && !kioskWindow.isDestroyed()) {
+      kioskWindow.close()
+      kioskWindow = null
+    }
+    mainWindow = null
+  })
+}
+
+// ── Kiosk Window (external monitor) ──
+function createKioskWindow() {
+  // If already open, just focus it
+  if (kioskWindow && !kioskWindow.isDestroyed()) {
+    kioskWindow.focus()
+    return
+  }
+
+  // Find the best display for the kiosk
+  // We look for a display NOT at x:0 (the primary/original display is always at x=0)
+  const displays = screen.getAllDisplays()
+  console.log('Available displays:', displays.length, displays.map(d => ({ bounds: d.bounds })))
+  const secondaryDisplay = displays.find(d => d.bounds.x !== 0) || displays[0]
+  console.log('Target display for kiosk:', secondaryDisplay.bounds)
+
+  kioskWindow = new BrowserWindow({
+    title: 'REPCHECK Kiosk',
+    frame: false,
+    resizable: false,
+    alwaysOnTop: false,
+    backgroundColor: '#101215',
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  })
+
+  // Load the app with kiosk mode query param
+  const kioskUrl = process.env.VITE_DEV_SERVER_URL
+    ? `${process.env.VITE_DEV_SERVER_URL}?mode=kiosk`
+    : `file://${path.join(__dirname, '../dist/index.html').replace(/\\/g, '/')}?mode=kiosk`
+  kioskWindow.loadURL(kioskUrl)
+
+  // Once ready, position on the secondary display and show
+  kioskWindow.once('ready-to-show', () => {
+    const currentDisplays = screen.getAllDisplays()
+    const target = currentDisplays.find(d => d.bounds.x !== 0) || currentDisplays[0]
+    console.log('Moving kiosk to display:', target.bounds)
+    kioskWindow?.setBounds(target.bounds)
+    kioskWindow?.show()
+  })
+
+  kioskWindow.on('closed', () => {
+    kioskWindow = null
+  })
+}
+
+// ── Kiosk Auto-Launch ──
+function setupKioskAutoLaunch() {
+  // Check for secondary display on startup (look for display NOT at x:0)
+  const checkAndLaunch = () => {
+    const displays = screen.getAllDisplays()
+    const hasSecondary = displays.some(d => d.bounds.x !== 0)
+    if (hasSecondary && mainWindow && !mainWindow.isDestroyed()) {
+      createKioskWindow()
+    }
+  }
+
+  // Check immediately on startup (with a small delay to let the main window settle)
+  setTimeout(checkAndLaunch, 1500)
+
+  // Listen for new displays being added (monitor plugged in)
+  screen.on('display-added', () => {
+    console.log('Display added — auto-launching kiosk window')
+    createKioskWindow()
+  })
+
+  // Listen for displays being removed (monitor unplugged)
+  screen.on('display-removed', () => {
+    const displays = screen.getAllDisplays()
+    const hasSecondary = displays.some(d => d.bounds.x !== 0)
+    if (!hasSecondary && kioskWindow && !kioskWindow.isDestroyed()) {
+      console.log('Secondary display removed — closing kiosk window')
+      kioskWindow.close()
+      kioskWindow = null
+    }
+  })
 }
 
 // Auto-expire members whose plan_end has passed
@@ -942,6 +1033,18 @@ function setupIPC() {
     `).all(limit || 100)
   })
 
+  // Kiosk window
+  ipcMain.handle('open-kiosk-window', () => {
+    createKioskWindow()
+  })
+
+  ipcMain.handle('close-kiosk-window', () => {
+    if (kioskWindow && !kioskWindow.isDestroyed()) {
+      kioskWindow.close()
+      kioskWindow = null
+    }
+  })
+
   // Auto-updater
   ipcMain.handle('check-for-updates', async () => {
     try {
@@ -1036,6 +1139,8 @@ app.whenReady().then(() => {
     console.log('IPC handlers set up')
     createWindow()
     console.log('Window created')
+    setupKioskAutoLaunch()
+    console.log('Kiosk auto-launch configured')
   } catch (error) {
     console.error('Failed to start app:', error)
   }

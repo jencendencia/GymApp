@@ -14,6 +14,15 @@ import { Member, TodayStats, Checkin } from './types/electron'
 
 type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings'
 
+// Check if we're running in kiosk mode (separate window on external monitor)
+const isKioskMode = () => {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('mode') === 'kiosk'
+  }
+  return false
+}
+
 function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
   const [appName, setAppName] = useState('REPCHECK')
@@ -104,6 +113,15 @@ function App() {
       default:
         return <Kiosk onRefresh={loadData} />
     }
+  }
+
+  // If in kiosk mode (separate window on external monitor), render only the kiosk — no chrome
+  if (isKioskMode()) {
+    return (
+      <div className="app app-kiosk-mode">
+        <Kiosk onRefresh={() => {}} />
+      </div>
+    )
   }
 
   return (

@@ -73,6 +73,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCoachMonthlyPayments: (coachId: number, date: string) =>
     ipcRenderer.invoke('get-coach-monthly-payments', coachId, date),
 
+  // Kiosk window
+  openKioskWindow: () => ipcRenderer.invoke('open-kiosk-window'),
+  closeKioskWindow: () => ipcRenderer.invoke('close-kiosk-window'),
+
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),

@@ -66,6 +66,10 @@ export interface ElectronAPI {
   createBackup: () => Promise<{ success: boolean; path?: string; reason?: string }>
   restoreBackup: () => Promise<{ success: boolean; reason?: string }>
 
+  // Kiosk window
+  openKioskWindow: () => Promise<void>
+  closeKioskWindow: () => Promise<void>
+
   // Settings
   getSettings: () => Promise<Record<string, string>>
   getSetting: (key: string) => Promise<string | null>

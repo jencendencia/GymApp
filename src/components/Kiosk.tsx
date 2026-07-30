@@ -14,8 +14,18 @@ const RP_ID = 'localhost'
 const AUTO_SCAN_DELAY = 600 // ms delay before auto-scanning
 const AUTO_CLOSE_SECONDS = 10
 
+// Check if this is running in the dedicated kiosk window
+const isKioskWindow = () => {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('mode') === 'kiosk'
+  }
+  return false
+}
+
 function Kiosk({ onRefresh }: KioskProps) {
   const [state, setState] = useState<KioskState>('idle')
+  const [kioskLogo, setKioskLogo] = useState('')
   const [matchedMember, setMatchedMember] = useState<Member | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showManualSearch, setShowManualSearch] = useState(false)
@@ -25,6 +35,17 @@ function Kiosk({ onRefresh }: KioskProps) {
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const isScanning = useRef(false)
   const stateRef = useRef(state)
+
+  // Load kiosk logo from settings
+  useEffect(() => {
+    const loadLogo = async () => {
+      try {
+        const logo = await window.electronAPI.getSetting('kioskLogo')
+        if (logo) setKioskLogo(logo)
+      } catch {}
+    }
+    loadLogo()
+  }, [])
 
   // Keep stateRef in sync
   useEffect(() => {
@@ -246,6 +267,14 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
   }
 
+  const handleOpenExternalKiosk = () => {
+    window.electronAPI.openKioskWindow()
+  }
+
+  const handleCloseExternalKiosk = () => {
+    window.electronAPI.closeKioskWindow()
+  }
+
   const resetToIdle = () => {
     setState('idle')
     setMatchedMember(null)
@@ -262,6 +291,11 @@ function Kiosk({ onRefresh }: KioskProps) {
 
   const renderIdleState = () => (
     <div className="kiosk-idle animate-fade-in">
+      {kioskLogo && (
+        <div className="kiosk-big-logo">
+          <img src={kioskLogo} alt="Gym Logo" />
+        </div>
+      )}
       <div className="radar-container">
         <div className="radar-ring ring-1" />
         <div className="radar-ring ring-2" />
@@ -299,6 +333,19 @@ function Kiosk({ onRefresh }: KioskProps) {
           </button>
         </div>
       )}
+
+      {/* Open/Close external kiosk window buttons */}
+      <div className="kiosk-external-controls">
+        {isKioskWindow() ? (
+          <button className="btn btn-secondary btn-sm" onClick={handleCloseExternalKiosk}>
+            ✕ Close Kiosk Window
+          </button>
+        ) : (
+          <button className="btn btn-primary" onClick={handleOpenExternalKiosk}>
+            🖥️ Open Kiosk on External Monitor
+          </button>
+        )}
+      </div>
     </div>
   )
 

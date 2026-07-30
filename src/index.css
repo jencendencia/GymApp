@@ -265,3 +265,99 @@ body {
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }
+
+/* ── Kiosk Mode (separate window on external display) ── */
+.app-kiosk-mode {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg, #101215);
+}
+
+.app-kiosk-mode .kiosk {
+  flex: 1;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 40px;
+  overflow-y: auto;
+}
+
+/* Larger touch-friendly sizing in kiosk mode */
+.app-kiosk-mode .kiosk-title {
+  font-size: 42px;
+}
+
+.app-kiosk-mode .kiosk-subtitle {
+  font-size: 18px;
+}
+
+.app-kiosk-mode .radar-container {
+  width: 260px;
+  height: 260px;
+}
+
+.app-kiosk-mode .fingerprint-icon svg {
+  width: 64px;
+  height: 64px;
+}
+
+.app-kiosk-mode .profile-card {
+  padding: 32px;
+}
+
+.app-kiosk-mode .profile-avatar {
+  width: 96px;
+  height: 96px;
+  font-size: 42px;
+  border-radius: 20px;
+}
+
+.app-kiosk-mode .profile-name {
+  font-size: 32px;
+}
+
+.app-kiosk-mode .kiosk-manual-link {
+  font-size: 16px;
+}
+
+.app-kiosk-mode .manual-search-box {
+  width: 500px;
+}
+
+.app-kiosk-mode .manual-search-box .input {
+  font-size: 18px;
+  padding: 14px 18px;
+}
+
+.app-kiosk-mode .manual-search-box .btn {
+  font-size: 16px;
+  padding: 14px 28px;
+}
+
+.app-kiosk-mode .kiosk-profile {
+  max-width: 600px;
+}
+
+/* Larger buttons for touchscreen */
+.app-kiosk-mode .profile-actions .btn {
+  padding: 16px 24px;
+  font-size: 16px;
+}
+
+.app-kiosk-mode .btn {
+  min-height: 52px;
+}
+
+.app-kiosk-mode .no-match-icon {
+  width: 100px;
+  height: 100px;
+  font-size: 44px;
+}
+
+/* Hide the Open Kiosk button inside the kiosk window itself */
+.app-kiosk-mode .kiosk-external-controls {
+  display: none !important;
+}
