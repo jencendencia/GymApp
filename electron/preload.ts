@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateMember: (id: number, member: any) => ipcRenderer.invoke('update-member', id, member),
   deleteMember: (id: number) => ipcRenderer.invoke('delete-member', id),
   searchMembers: (query: string) => ipcRenderer.invoke('search-members', query),
+  checkMemberIdExists: (memberId: string) => ipcRenderer.invoke('check-member-id-exists', memberId),
 
   // Plans
   getPlans: () => ipcRenderer.invoke('get-plans'),
@@ -45,6 +46,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Reports
   getDailyReport: (date: string) => ipcRenderer.invoke('get-daily-report', date),
   getMonthlyReport: (yearMonth: string) => ipcRenderer.invoke('get-monthly-report', yearMonth),
+  sendReportEmail: (data: { html: string; recipient: string; appName: string; filename: string }) =>
+    ipcRenderer.invoke('send-report-email', data),
+  testSmtp: () => ipcRenderer.invoke('test-smtp'),
 
   // Activity Logs
   createActivityLog: (log: any) => ipcRenderer.invoke('create-activity-log', log),
@@ -78,6 +82,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Kiosk window
   openKioskWindow: () => ipcRenderer.invoke('open-kiosk-window'),
   closeKioskWindow: () => ipcRenderer.invoke('close-kiosk-window'),
+
+  // Auth / Staff
+  login: (username: string, password: string) => ipcRenderer.invoke('login', username, password),
+  getUsers: () => ipcRenderer.invoke('get-users'),
+  createUser: (user: any) => ipcRenderer.invoke('create-user', user),
+  updateUser: (id: number, user: any) => ipcRenderer.invoke('update-user', id, user),
+  deleteUser: (id: number) => ipcRenderer.invoke('delete-user', id),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),

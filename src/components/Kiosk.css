@@ -1,9 +1,10 @@
 .kiosk {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 24px 40px 40px;
   overflow-y: auto;
 }
 
@@ -12,15 +13,21 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
+  gap: 12px;
   max-width: 500px;
+  width: 100%;
+  cursor: pointer;
+}
+
+.kiosk-idle:active {
+  opacity: 0.98;
 }
 
 /* Big Kiosk Logo */
 .kiosk-big-logo {
-  width: 180px;
-  height: 180px;
-  border-radius: 24px;
+  width: 360px;
+  height: 360px;
+  border-radius: 48px;
   overflow: hidden;
   background: var(--surface, #1a1d23);
   border: 1px solid var(--border, #2a2d35);
@@ -28,32 +35,32 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
 }
 
 .kiosk-big-logo img {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  padding: 16px;
+  padding: 32px;
 }
 
 /* Larger kiosk logo in kiosk window mode */
 .app-kiosk-mode .kiosk-big-logo {
-  width: 240px;
-  height: 240px;
-  border-radius: 32px;
-  margin-bottom: 16px;
+  width: 480px;
+  height: 480px;
+  border-radius: 64px;
+  margin-bottom: 32px;
 }
 
 .app-kiosk-mode .kiosk-big-logo img {
-  padding: 24px;
+  padding: 48px;
 }
 
 .radar-container {
   position: relative;
-  width: 200px;
-  height: 200px;
+  width: 120px;
+  height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -86,15 +93,21 @@
   color: var(--accent);
 }
 
+.fingerprint-icon svg {
+  width: 32px;
+  height: 32px;
+}
+
 .kiosk-title {
-  font-size: 32px;
+  font-size: 24px;
   color: var(--text);
   margin: 0;
 }
 
 .kiosk-subtitle {
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: 14px;
+  margin: 0;
 }
 
 .kiosk-scan-btn {
@@ -118,10 +131,58 @@
   color: var(--text);
 }
 
+.kiosk-member-id-section {
+  width: 100%;
+  max-width: 400px;
+  margin-top: 8px;
+}
+
+.kiosk-member-id-input {
+  width: 100%;
+  padding: 14px 18px;
+  font-size: 20px;
+  font-family: var(--font-display);
+  text-align: center;
+  letter-spacing: 2px;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  background: rgba(198, 255, 61, 0.05);
+  color: var(--text);
+  outline: none;
+  transition: box-shadow 0.2s;
+}
+
+.kiosk-member-id-input:focus {
+  box-shadow: 0 0 0 3px rgba(198, 255, 61, 0.2);
+}
+
+.kiosk-member-id-input::placeholder {
+  color: var(--text-faint);
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.kiosk-member-id-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.kiosk-member-id-error {
+  color: var(--danger);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 6px;
+}
+
 .manual-search-box {
   display: flex;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 16px;
   width: 400px;
 }
 

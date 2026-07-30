@@ -1,8 +1,11 @@
-import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, screen, shell } from 'electron'
+import crypto from 'crypto'
+import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
+import nodemailer from 'nodemailer'
 import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
@@ -143,13 +146,26 @@ function initDatabase() {
     { table: 'payments', column: 'payment_method', def: 'TEXT DEFAULT \'cash\'' },
     { table: 'payments', column: 'staff_id', def: 'INTEGER DEFAULT NULL' },
     { table: 'checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
+    { table: 'members', column: 'waiver_agreed_at', def: 'DATETIME DEFAULT NULL' },
+    { table: 'staff', column: 'photo', def: 'TEXT DEFAULT NULL' },
+    { table: 'staff', column: 'display_name', def: 'TEXT DEFAULT NULL' },
   ]
+
   for (const col of columnsToAdd) {
     try {
       db!.exec(`ALTER TABLE ${col.table} ADD COLUMN ${col.column} ${col.def}`)
     } catch {
       // Column already exists — ignore
     }
+  }
+
+  // Seed default admin if no staff exist
+  const staffCount = db?.prepare('SELECT COUNT(*) as count FROM staff').get() as any
+  if (staffCount && staffCount.count === 0) {
+    const hash = crypto.createHash('sha256').update('admin').digest('hex')
+    db?.prepare('INSERT INTO staff (username, password_hash, role, display_name) VALUES (?, ?, ?, ?)')
+      .run('admin', hash, 'admin', 'Administrator')
+    console.log('Default admin user created (admin/admin)')
   }
 
   return db
@@ -320,10 +336,15 @@ function setupIPC() {
     `).get(id)
   })
 
+  ipcMain.handle('check-member-id-exists', (_, memberId: string) => {
+    const existing = db?.prepare('SELECT id, name FROM members WHERE member_id = ?').get(memberId) as any
+    return existing || null
+  })
+
   ipcMain.handle('create-member', (_, member) => {
     return db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -341,13 +362,14 @@ function setupIPC() {
       member.coach_id || null,
       member.coaching_start || null,
       member.coaching_end || null,
-      member.balance
+      member.balance,
+      member.waiver_agreed_at || null
     )
   })
 
   ipcMain.handle('update-member', (_, id: number, member) => {
     return db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = ?
       WHERE id = ?
     `).run(
       member.name,
@@ -367,6 +389,7 @@ function setupIPC() {
       member.coaching_end,
       member.balance,
       member.status,
+      member.waiver_agreed_at || null,
       id
     )
   })
@@ -1130,6 +1153,130 @@ function setupIPC() {
       }
     } catch (error) {
       return { activated: false, machineId: null, storedMachineId: null }
+    }
+  })
+
+  // ── Auth / Staff ──
+  ipcMain.handle('login', async (_, username: string, password: string) => {
+    try {
+      const hash = crypto.createHash('sha256').update(password).digest('hex')
+      const user = db?.prepare('SELECT id, username, role, photo, display_name FROM staff WHERE username = ? AND password_hash = ?')
+        .get(username, hash) as any
+      if (user) {
+        return { success: true, user }
+      }
+      return { success: false, message: 'Invalid username or password' }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('get-users', async () => {
+    try {
+      return db?.prepare('SELECT id, username, role, photo, display_name, created_at FROM staff ORDER BY username ASC').all() || []
+    } catch (error: any) {
+      throw error
+    }
+  })
+
+  ipcMain.handle('create-user', async (_, user: { username: string; password: string; role: string; display_name?: string; photo?: string }) => {
+    try {
+      // Check if username already exists
+      const existing = db?.prepare('SELECT id FROM staff WHERE username = ?').get(user.username) as any
+      if (existing) {
+        return { success: false, message: 'Username already exists' }
+      }
+      const hash = crypto.createHash('sha256').update(user.password).digest('hex')
+      db?.prepare('INSERT INTO staff (username, password_hash, role, photo, display_name) VALUES (?, ?, ?, ?, ?)')
+        .run(user.username, hash, user.role || 'staff', user.photo || null, user.display_name || null)
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('update-user', async (_, id: number, user: { username?: string; password?: string; role?: string; display_name?: string; photo?: string }) => {
+    try {
+      if (user.password) {
+        const hash = crypto.createHash('sha256').update(user.password).digest('hex')
+        db?.prepare('UPDATE staff SET username=?, password_hash=?, role=?, photo=?, display_name=? WHERE id=?')
+          .run(user.username, hash, user.role, user.photo || null, user.display_name || null, id)
+      } else {
+        db?.prepare('UPDATE staff SET username=?, role=?, photo=?, display_name=? WHERE id=?')
+          .run(user.username, user.role, user.photo || null, user.display_name || null, id)
+      }
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('delete-user', async (_, id: number) => {
+    try {
+      // Don't allow deleting the last admin
+      const adminCount = db?.prepare("SELECT COUNT(*) as count FROM staff WHERE role = 'admin'").get() as any
+      const target = db?.prepare('SELECT role FROM staff WHERE id = ?').get(id) as any
+      if (target?.role === 'admin' && adminCount?.count <= 1) {
+        return { success: false, message: 'Cannot delete the last admin account' }
+      }
+      db?.prepare('DELETE FROM staff WHERE id = ?').run(id)
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  // ── SMTP Email ──
+  function createSmtpTransport() {
+    const host = db?.prepare('SELECT value FROM settings WHERE key = ?').get('smtpHost') as any
+    const port = db?.prepare('SELECT value FROM settings WHERE key = ?').get('smtpPort') as any
+    const user = db?.prepare('SELECT value FROM settings WHERE key = ?').get('smtpUser') as any
+    const pass = db?.prepare('SELECT value FROM settings WHERE key = ?').get('smtpPass') as any
+    const fromEmail = db?.prepare('SELECT value FROM settings WHERE key = ?').get('smtpFromEmail') as any
+
+    if (!host?.value) throw new Error('SMTP not configured. Go to Settings to set up email.')
+
+    return {
+      transport: nodemailer.createTransport({
+        host: host.value,
+        port: port?.value ? parseInt(port.value, 10) : 587,
+        secure: port?.value ? parseInt(port.value, 10) === 465 : false,
+        auth: {
+          user: user?.value || '',
+          pass: pass?.value || '',
+        },
+      }),
+      fromEmail: fromEmail?.value || user?.value || '',
+    }
+  }
+
+  ipcMain.handle('test-smtp', async () => {
+    try {
+      const { transport } = createSmtpTransport()
+      await transport.verify()
+      transport.close()
+      return { success: true, message: 'SMTP connection successful!' }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('send-report-email', async (_, data: { html: string; recipient: string; appName: string; filename: string }) => {
+    try {
+      const { transport, fromEmail } = createSmtpTransport()
+
+      const info = await transport.sendMail({
+        from: `"${data.appName}" <${fromEmail}>`,
+        to: data.recipient,
+        subject: `Report from ${data.appName}`,
+        html: data.html,
+      })
+
+      transport.close()
+      return { success: true, message: `Email sent! Message ID: ${info.messageId}` }
+    } catch (error: any) {
+      console.error('send-report-email error:', error)
+      return { success: false, message: error.message }
     }
   })
 

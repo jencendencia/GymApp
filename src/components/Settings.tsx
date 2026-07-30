@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
+import { StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
 
 interface SettingsState {
@@ -11,6 +12,11 @@ interface SettingsState {
   enableNotifications: boolean
   appLogo: string
   kioskLogo: string
+  smtpHost: string
+  smtpPort: string
+  smtpUser: string
+  smtpPass: string
+  smtpFromEmail: string
 }
 
 type UpdateStatusState =
@@ -28,7 +34,8 @@ type BannerState =
   | { type: 'error'; message: string }
   | { type: 'loading'; message: string }
 
-function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (name: string) => void; onAppLogoChange?: (logo: string) => void }) {
+function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUser?: StaffUser | null; onAppNameChange?: (name: string) => void; onAppLogoChange?: (logo: string) => void }) {
+  const isAdmin = currentUser?.role === 'admin'
   const [settings, setSettings] = useState<SettingsState>({
     appName: 'REPCHECK',
     scannerEnabled: true,
@@ -38,8 +45,15 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
     enableNotifications: true,
     appLogo: '',
     kioskLogo: '',
+    smtpHost: '',
+    smtpPort: '587',
+    smtpUser: '',
+    smtpPass: '',
+    smtpFromEmail: '',
   })
   const [saved, setSaved] = useState(false)
+  const [smtpProvider, setSmtpProvider] = useState('')
+  const [smtpTestResult, setSmtpTestResult] = useState<BannerState>({ type: 'none' })
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
 
@@ -58,6 +72,18 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       if (data.enableNotifications) setSettings(prev => ({ ...prev, enableNotifications: data.enableNotifications === 'true' }))
       if (data.appLogo) setSettings(prev => ({ ...prev, appLogo: data.appLogo }))
       if (data.kioskLogo) setSettings(prev => ({ ...prev, kioskLogo: data.kioskLogo }))
+      if (data.smtpHost) {
+        setSettings(prev => ({ ...prev, smtpHost: data.smtpHost }))
+        // Auto-detect the provider from saved host
+        if (data.smtpHost === 'smtp.gmail.com') setSmtpProvider('smtp.gmail.com')
+        else if (data.smtpHost === 'smtp.office365.com') setSmtpProvider('smtp.office365.com')
+        else if (data.smtpHost === 'smtp.mail.yahoo.com') setSmtpProvider('smtp.mail.yahoo.com')
+        else setSmtpProvider('')
+      }
+      if (data.smtpPort) setSettings(prev => ({ ...prev, smtpPort: data.smtpPort }))
+      if (data.smtpUser) setSettings(prev => ({ ...prev, smtpUser: data.smtpUser }))
+      if (data.smtpPass) setSettings(prev => ({ ...prev, smtpPass: data.smtpPass }))
+      if (data.smtpFromEmail) setSettings(prev => ({ ...prev, smtpFromEmail: data.smtpFromEmail }))
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
@@ -74,6 +100,11 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
         enableNotifications: settings.enableNotifications.toString(),
         appLogo: settings.appLogo,
         kioskLogo: settings.kioskLogo,
+        smtpHost: settings.smtpHost,
+        smtpPort: settings.smtpPort,
+        smtpUser: settings.smtpUser,
+        smtpPass: settings.smtpPass,
+        smtpFromEmail: settings.smtpFromEmail,
       })
       setSaved(true)
       if (onAppNameChange) onAppNameChange(settings.appName)
@@ -239,9 +270,16 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
     <div className="settings-page">
       <div className="page-header">
         <h1 className="display-text page-title">Settings</h1>
-      </div>
+      </div>        {/* Read-only banner for staff */}
+        {!isAdmin && (
+          <div className="settings-readonly-banner">
+            <span>👁️ Viewing settings in read-only mode</span>
+            <span className="settings-readonly-hint">Only administrators can modify settings.</span>
+          </div>
+        )}
 
-      <div className="settings-content">
+        <fieldset disabled={!isAdmin} className="settings-fieldset">
+        <div className="settings-content">
         <section className="settings-section">
           <h2 className="section-title">General</h2>
           <div className="settings-group">
@@ -365,6 +403,26 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
               />
             </div>
           </div>
+
+          {/* U.R.U. 4500 setup info */}
+          <div style={{ marginTop: 12, padding: '14px 18px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            <strong style={{ color: 'var(--accent)' }}>🖐️ Digital Persona U.R.U. 4500</strong>
+            <p style={{ margin: '6px 0 0' }}>
+              This app supports the <strong>U.R.U. 4500</strong> fingerprint reader via <strong>Windows Hello</strong>.
+              To set it up:
+            </p>
+            <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+              <li>Plug in the U.R.U. 4500 via USB</li>
+              <li>Download and install the{' '}
+                <a href="https://www.hidglobal.com/drivers/46502" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
+                  WBF Driver
+                </a>
+                {' '}from HID Global</li>
+              <li>Go to <strong>Windows Settings → Accounts → Sign-in options → Fingerprint</strong></li>
+              <li>Click <strong>Set up</strong> and register your fingerprint with Windows Hello</li>
+              <li>Once enrolled, the <strong>Kiosk check-in</strong> and <strong>Member registration</strong> will automatically use the scanner</li>
+            </ol>
+          </div>
         </section>
 
         <section className="settings-section">
@@ -423,6 +481,166 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
               </select>
             </div>
           </div>
+        </section>
+
+        <section className="settings-section">
+          <h2 className="section-title">Email (SMTP)</h2>
+          <div className="settings-group">
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Email Provider</span>
+                <span className="setting-description">Select your provider to auto-fill SMTP settings</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={smtpProvider}
+                onChange={(e) => {
+                  const provider = e.target.value
+                  setSmtpProvider(provider)
+                  if (provider === 'smtp.gmail.com') {
+                    setSettings({ ...settings, smtpHost: 'smtp.gmail.com', smtpPort: '587' })
+                  } else if (provider === 'smtp.office365.com') {
+                    setSettings({ ...settings, smtpHost: 'smtp.office365.com', smtpPort: '587' })
+                  } else if (provider === 'smtp.mail.yahoo.com') {
+                    setSettings({ ...settings, smtpHost: 'smtp.mail.yahoo.com', smtpPort: '465' })
+                  }
+                  // Custom/Other selected = do nothing, user fills manually
+                }}
+              >
+                <option value="">— Custom / Other —</option>
+                <option value="smtp.gmail.com">📧 Gmail</option>
+                <option value="smtp.office365.com">📧 Outlook / Hotmail</option>
+                <option value="smtp.mail.yahoo.com">📧 Yahoo Mail</option>
+              </select>
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">SMTP Host</span>
+                <span className="setting-description">SMTP server address</span>
+              </div>
+              <input
+                type="text"
+                className="input setting-input"
+                value={settings.smtpHost}
+                onChange={(e) => setSettings({ ...settings, smtpHost: e.target.value })}
+                placeholder="smtp.example.com"
+              />
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">SMTP Port</span>
+                <span className="setting-description">587 (TLS) or 465 (SSL)</span>
+              </div>
+              <input
+                type="number"
+                className="input setting-input"
+                value={settings.smtpPort}
+                onChange={(e) => setSettings({ ...settings, smtpPort: e.target.value })}
+                style={{ width: 100 }}
+              />
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Username</span>
+                <span className="setting-description">Your full email address</span>
+              </div>
+              <input
+                type="text"
+                className="input setting-input"
+                value={settings.smtpUser}
+                onChange={(e) => setSettings({ ...settings, smtpUser: e.target.value })}
+                placeholder="you@gmail.com"
+              />
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Password</span>
+                <span className="setting-description">
+                  {settings.smtpHost === 'smtp.gmail.com'
+                    ? 'Use an App Password (not your regular password). Get one at myaccount.google.com/apppasswords'
+                    : settings.smtpHost === 'smtp.office365.com'
+                    ? 'Your Outlook password or an app password if 2FA is enabled'
+                    : settings.smtpHost === 'smtp.mail.yahoo.com'
+                    ? 'Use an App Password. Generate one at your Yahoo account security settings'
+                    : 'SMTP password or API key'}
+                </span>
+              </div>
+              <input
+                type="password"
+                className="input setting-input"
+                value={settings.smtpPass}
+                onChange={(e) => setSettings({ ...settings, smtpPass: e.target.value })}
+                placeholder="••••••••"
+              />
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">From Email</span>
+                <span className="setting-description">Sender address shown to recipients (usually your email)</span>
+              </div>
+              <input
+                type="email"
+                className="input setting-input"
+                value={settings.smtpFromEmail}
+                onChange={(e) => setSettings({ ...settings, smtpFromEmail: e.target.value })}
+                placeholder="you@gmail.com"
+              />
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Test Connection</span>
+                <span className="setting-description">Save & verify SMTP settings</span>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  setSmtpTestResult({ type: 'loading', message: 'Testing SMTP connection...' })
+                  try {
+                    await window.electronAPI.saveSettings({
+                      smtpHost: settings.smtpHost,
+                      smtpPort: settings.smtpPort,
+                      smtpUser: settings.smtpUser,
+                      smtpPass: settings.smtpPass,
+                      smtpFromEmail: settings.smtpFromEmail,
+                    })
+                    const result = await window.electronAPI.testSmtp()
+                    if (result.success) {
+                      setSmtpTestResult({ type: 'success', message: result.message })
+                    } else {
+                      setSmtpTestResult({ type: 'error', message: result.message })
+                    }
+                  } catch (error: any) {
+                    setSmtpTestResult({ type: 'error', message: error.message })
+                  }
+                  setTimeout(() => setSmtpTestResult(t => t.type !== 'loading' ? { type: 'none' } : t), 6000)
+                }}
+                disabled={!settings.smtpHost || !settings.smtpUser}
+              >
+                Test Connection
+              </button>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--accent)' }}>💡 Gmail users:</strong> You need an <strong>App Password</strong> (not your regular password) because 2-factor authentication is usually enabled.
+            Create one at{' '}
+            <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
+              myaccount.google.com/apppasswords
+            </a>
+            . After generating, copy the 16-character password and paste it above.
+          </div>
+          {smtpTestResult.type !== 'none' && (
+            <div className={`banner banner-${smtpTestResult.type}`} style={{ marginTop: 12 }}>
+              <span className="banner-text">
+                {smtpTestResult.type === 'loading' && '⏳ '}
+                {smtpTestResult.type === 'success' && '✅ '}
+                {smtpTestResult.type === 'error' && '❌ '}
+                {smtpTestResult.message}
+              </span>
+              {smtpTestResult.type !== 'loading' && (
+                <button className="banner-dismiss" onClick={() => setSmtpTestResult({ type: 'none' })}>✕</button>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="settings-section">
@@ -533,11 +751,14 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
 
         <div className="settings-actions">
           {saved && <span className="save-success">✓ Settings saved!</span>}
-          <button className="btn btn-primary" onClick={handleSave}>
-            Save Settings
-          </button>
+          {isAdmin && (
+            <button className="btn btn-primary" onClick={handleSave}>
+              Save Settings
+            </button>
+          )}
         </div>
       </div>
+      </fieldset>
     </div>
   )
 }

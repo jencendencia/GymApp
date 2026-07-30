@@ -1,0 +1,118 @@
+/* ── Confirm Modal ── */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  animation: confirm-fade-in 0.15s ease-out;
+}
+
+@keyframes confirm-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.confirm-modal {
+  width: 360px;
+  max-width: 90vw;
+  background: var(--surface, #1e2028);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 16px;
+  padding: 32px 28px 24px;
+  text-align: center;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  animation: confirm-slide-in 0.2s ease-out;
+}
+
+@keyframes confirm-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.confirm-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  line-height: 1;
+}
+
+.confirm-title {
+  font-family: var(--font-display, 'Oswald', sans-serif);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text, #ffffff);
+  margin: 0 0 8px;
+}
+
+.confirm-message {
+  font-family: var(--font-body, 'Inter', sans-serif);
+  font-size: 14px;
+  color: var(--text-muted, #8b8fa3);
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.confirm-actions .btn {
+  min-width: 100px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-body, 'Inter', sans-serif);
+}
+
+.confirm-actions .btn-secondary {
+  background: var(--surface-2, #262a33);
+  color: var(--text, #ffffff);
+  border: 1px solid var(--border, #2a2d35);
+}
+
+.confirm-actions .btn-secondary:hover {
+  background: var(--border, #2a2d35);
+}
+
+.confirm-actions .btn-danger {
+  background: rgba(255, 77, 77, 0.15);
+  color: #ff4d4d;
+  border: 1px solid rgba(255, 77, 77, 0.25);
+}
+
+.confirm-actions .btn-danger:hover {
+  background: rgba(255, 77, 77, 0.25);
+  box-shadow: 0 4px 16px rgba(255, 77, 77, 0.2);
+  transform: translateY(-1px);
+}
+
+.confirm-actions .btn-primary {
+  background: var(--accent, #c6ff3d);
+  color: var(--bg, #0e1015);
+}
+
+.confirm-actions .btn-primary:hover {
+  background: #b8f030;
+  box-shadow: 0 4px 16px rgba(198, 255, 61, 0.25);
+  transform: translateY(-1px);
+}
+
+.confirm-actions .btn-danger:active,
+.confirm-actions .btn-primary:active {
+  transform: translateY(0);
+}

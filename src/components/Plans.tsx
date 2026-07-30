@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import './Plans.css'
-import { Plan } from '../types/electron'
+import { Plan, StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
 
-function Plans() {
+function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
+  const isAdmin = currentUser?.role === 'admin'
   const [plans, setPlans] = useState<Plan[]>([])
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
@@ -107,13 +108,15 @@ function Plans() {
     <div className="plans-page">
       <div className="page-header">
         <h1 className="display-text page-title">Plans</h1>
-        <button className="btn btn-primary" onClick={() => {
-          resetForm()
-          setSelectedPlan(null)
-          setShowForm(true)
-        }}>
-          + Add Plan
-        </button>
+        {isAdmin && (
+          <button className="btn btn-primary" onClick={() => {
+            resetForm()
+            setSelectedPlan(null)
+            setShowForm(true)
+          }}>
+            + Add Plan
+          </button>
+        )}
       </div>
 
       <div className="plans-grid">
@@ -121,21 +124,23 @@ function Plans() {
           <p className="empty-message">No plans created yet</p>
         ) : (
           plans.map((plan) => (
-            <div key={plan.id} className="plan-card" onClick={() => openEditForm(plan)}>
+            <div key={plan.id} className={`plan-card ${!isAdmin ? 'plan-card-readonly' : ''}`} onClick={() => isAdmin && openEditForm(plan)}>
               <div className="plan-header">
                 <span className={`plan-type-badge ${plan.type}`}>
                   {formatType(plan.type)}
                 </span>
-                <button
-                  className="btn-icon danger"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleDelete(plan.id)
-                  }}
-                  title="Delete"
-                >
-                  ✕
-                </button>
+                {isAdmin && (
+                  <button
+                    className="btn-icon danger"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDelete(plan.id)
+                    }}
+                    title="Delete"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
               <h3 className="plan-name display-text">{plan.name}</h3>
               <div className="plan-price mono-text">₱{plan.price.toFixed(2)}</div>

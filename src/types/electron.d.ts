@@ -11,6 +11,7 @@ export interface ElectronAPI {
   updateMember: (id: number, member: UpdateMemberInput) => Promise<any>
   deleteMember: (id: number) => Promise<any>
   searchMembers: (query: string) => Promise<Member[]>
+  checkMemberIdExists: (memberId: string) => Promise<{ id: number; name: string } | null>
 
   // Plans
   getPlans: () => Promise<Plan[]>
@@ -59,6 +60,9 @@ export interface ElectronAPI {
   // Reports
   getDailyReport: (date: string) => Promise<DailyReport>
   getMonthlyReport: (yearMonth: string) => Promise<MonthlyReport>
+  sendReportEmail: (data: { html: string; recipient: string; appName: string; filename: string }) =>
+    Promise<{ success: boolean; filePath?: string; message?: string }>
+  testSmtp: () => Promise<{ success: boolean; message: string }>
 
   // Activity Logs
   createActivityLog: (log: CreateActivityLogInput) => Promise<any>
@@ -71,6 +75,13 @@ export interface ElectronAPI {
   // Kiosk window
   openKioskWindow: () => Promise<void>
   closeKioskWindow: () => Promise<void>
+
+  // Auth / Staff
+  login: (username: string, password: string) => Promise<{ success: boolean; user?: StaffUser; message?: string }>
+  getUsers: () => Promise<StaffUser[]>
+  createUser: (user: CreateStaffInput) => Promise<{ success: boolean; message?: string }>
+  updateUser: (id: number, user: UpdateStaffInput) => Promise<{ success: boolean; message?: string }>
+  deleteUser: (id: number) => Promise<{ success: boolean; message?: string }>
 
   // Settings
   getSettings: () => Promise<Record<string, string>>
@@ -128,6 +139,7 @@ export interface Member {
   balance: number
   status: 'active' | 'inactive' | 'expired'
   created_at: string
+  waiver_agreed_at?: string
   plan_name?: string
   coach_name?: string
 }
@@ -150,6 +162,7 @@ export interface CreateMemberInput {
   coaching_start?: string
   coaching_end?: string
   balance?: number
+  waiver_agreed_at?: string
 }
 
 export interface UpdateMemberInput {
@@ -170,6 +183,7 @@ export interface UpdateMemberInput {
   coaching_end?: string
   balance?: number
   status?: 'active' | 'inactive' | 'expired'
+  waiver_agreed_at?: string
 }
 
 export interface Plan {
@@ -316,6 +330,31 @@ export interface CreateActivityLogInput {
   entity_id?: number
   details?: string
   user?: string
+}
+
+export interface StaffUser {
+  id: number
+  username: string
+  role: 'admin' | 'staff'
+  photo?: string
+  display_name?: string
+  created_at: string
+}
+
+export interface CreateStaffInput {
+  username: string
+  password: string
+  role: 'admin' | 'staff'
+  display_name?: string
+  photo?: string
+}
+
+export interface UpdateStaffInput {
+  username?: string
+  password?: string
+  role?: 'admin' | 'staff'
+  display_name?: string
+  photo?: string
 }
 
 export interface UpdateStatus {

@@ -11,6 +11,21 @@ function Coach() {
   const [coachMembers, setCoachMembers] = useState<Member[]>([])
   const [selectedCoachForMembers, setSelectedCoachForMembers] = useState<number | null>(null)
 
+  // Unassigned members state
+  const [unassignedMembers, setUnassignedMembers] = useState<Member[]>([])
+
+  // Enroll to Coach modal state
+  const [showEnrollModal, setShowEnrollModal] = useState(false)
+  const [enrollMember, setEnrollMember] = useState<Member | null>(null)
+  const [enrollForm, setEnrollForm] = useState({
+    coach_id: 0,
+    coaching_start: new Date().toISOString().split('T')[0],
+    coaching_end: '',
+    record_payment: false,
+    payment_amount: '',
+    payment_notes: '',
+  })
+
   // Fee payments state
   const [showFeeModal, setShowFeeModal] = useState(false)
   const [feeCoachId, setFeeCoachId] = useState<number | null>(null)
@@ -26,8 +41,6 @@ function Coach() {
     notes: '',
   })
 
-  const [collectedMap, setCollectedMap] = useState<Record<number, number>>({})
-
   const [coachForm, setCoachForm] = useState({
     name: '',
     email: '',
@@ -38,28 +51,8 @@ function Coach() {
 
   useEffect(() => {
     loadCoaches()
+    loadUnassignedMembers()
   }, [])
-
-  useEffect(() => {
-    if (coaches.length > 0) {
-      loadAllCollected()
-    }
-  }, [coaches])
-
-  const loadAllCollected = async () => {
-    const map: Record<number, number> = {}
-    await Promise.all(
-      coaches.map(async (coach) => {
-        try {
-          const total = await window.electronAPI.getCoachFeeCollected(coach.id)
-          map[coach.id] = total
-        } catch {
-          map[coach.id] = 0
-        }
-      })
-    )
-    setCollectedMap(map)
-  }
 
   const loadCoaches = async () => {
     try {
@@ -79,9 +72,28 @@ function Coach() {
     }
   }
 
-  const handleCoachSelectForMembers = (coachId: number) => {
-    setSelectedCoachForMembers(coachId)
-    loadCoachMembers(coachId)
+  const loadUnassignedMembers = async () => {
+    try {
+      const allMembers = await window.electronAPI.getMembers()
+      setUnassignedMembers(allMembers.filter((m: Member) => !m.coach_id))
+    } catch (error) {
+      console.error('Failed to load unassigned members:', error)
+    }
+  }
+
+  const handleCoachSelectForMembers = (value: string) => {
+    const coachId = Number(value)
+    if (coachId === -1) {
+      setSelectedCoachForMembers(-1)
+      loadUnassignedMembers()
+    } else if (coachId > 0) {
+      setSelectedCoachForMembers(coachId)
+      loadCoachMembers(coachId)
+    } else {
+      setSelectedCoachForMembers(null)
+      setCoachMembers([])
+      setUnassignedMembers([])
+    }
   }
 
   const resetCoachForm = () => {
@@ -201,7 +213,7 @@ function Coach() {
     }
   }
 
-  const handleRecordFeePayment = async () => {
+const handleRecordFeePayment = async () => {
     if (!feeCoachId || !feeForm.member_id || !feeForm.amount) return
     try {
       await window.electronAPI.createCoachFeePayment({
@@ -217,8 +229,6 @@ function Coach() {
       ])
       setFeePayments(payments)
       setFeeCollected(collected)
-      // Sync the registration table's collected column too
-      setCollectedMap(prev => ({ ...prev, [feeCoachId]: collected }))
       setFeeForm({ member_id: 0, amount: '', notes: '' })
       
       // Log the fee payment
@@ -227,6 +237,98 @@ function Coach() {
     } catch (error) {
       console.error('Failed to record payment:', error)
     }
+  }
+
+    const addOneMonth = (dateStr: string): string => {
+    const date = new Date(dateStr + 'T12:00:00')
+    date.setMonth(date.getMonth() + 1)
+    return date.toISOString().split('T')[0]
+  }
+
+  const handleEnrollToCoach = async () => {
+    if (!enrollMember || !enrollForm.coach_id) return
+
+    try {
+      // Update member with coach assignment
+      await window.electronAPI.updateMember(enrollMember.id, {
+        name: enrollMember.name,
+        email: enrollMember.email || undefined,
+        phone: enrollMember.phone || undefined,
+        photo: enrollMember.photo || undefined,
+        emergency_contact: enrollMember.emergency_contact || undefined,
+        emergency_phone: enrollMember.emergency_phone || undefined,
+        plan_id: enrollMember.plan_id || undefined,
+        plan_start: enrollMember.plan_start || undefined,
+        plan_end: enrollMember.plan_end || undefined,
+        height: enrollMember.height,
+        weight: enrollMember.weight,
+        birthday: enrollMember.birthday || undefined,
+        coach_id: enrollForm.coach_id,
+        coaching_start: enrollForm.coaching_start || undefined,
+        coaching_end: enrollForm.coaching_end || undefined,
+        balance: enrollMember.balance || 0,
+        status: enrollMember.status,
+      })
+
+      // Record coach fee payment if enabled
+      if (enrollForm.record_payment && enrollForm.payment_amount) {
+        await window.electronAPI.createCoachFeePayment({
+          coach_id: enrollForm.coach_id,
+          member_id: enrollMember.id,
+          amount: Number(enrollForm.payment_amount),
+          notes: enrollForm.payment_notes || undefined,
+        })
+      }
+
+// Log the enrollment
+      const coach = coaches.find(c => c.id === enrollForm.coach_id)
+      log.action({
+        action: 'assign_coach',
+        entity_type: 'member',
+        entity_id: enrollMember.id,
+        details: JSON.stringify({
+          member_name: enrollMember.name,
+          coach_name: coach?.name || `Coach #${enrollForm.coach_id}`,
+          coach_id: enrollForm.coach_id,
+        }),
+      })
+
+      // Close modal and refresh
+      setShowEnrollModal(false)
+      setEnrollMember(null)
+      setEnrollForm({
+        coach_id: 0,
+        coaching_start: new Date().toISOString().split('T')[0],
+        coaching_end: '',
+        record_payment: false,
+        payment_amount: '',
+        payment_notes: '',
+      })
+
+      // Refresh current view
+      if (selectedCoachForMembers === -1) {
+        loadUnassignedMembers()
+      } else if (selectedCoachForMembers) {
+        loadCoachMembers(selectedCoachForMembers)
+      }
+      loadCoaches()
+    } catch (error) {
+      console.error('Failed to enroll member:', error)
+    }
+  }
+
+  const openEnrollModal = (member: Member) => {
+    const today = new Date().toISOString().split('T')[0]
+    setEnrollMember(member)
+    setEnrollForm({
+      coach_id: 0,
+      coaching_start: today,
+      coaching_end: addOneMonth(today),
+      record_payment: false,
+      payment_amount: '',
+      payment_notes: '',
+    })
+    setShowEnrollModal(true)
   }
 
   return (
@@ -245,7 +347,10 @@ function Coach() {
         </button>
         <button
           className={`coach-tab ${activeTab === 'members' ? 'active' : ''}`}
-          onClick={() => setActiveTab('members')}
+          onClick={() => {
+            setActiveTab('members')
+            loadUnassignedMembers()
+          }}
         >
           Coach Members
         </button>
@@ -278,30 +383,22 @@ function Coach() {
                   <th>Name</th>
                   <th>Specialty</th>
                   <th>Professional Fee</th>
-                  <th>Collected</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {coaches.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="empty-row">No coaches registered yet</td>
+                    <td colSpan={4} className="empty-row">No coaches registered yet</td>
                   </tr>
                 ) : (
                   coaches.map((coach) => {
-                    const collected = collectedMap[coach.id] ?? 0
                     return (
                       <tr key={coach.id}>
                         <td className="coach-name">{coach.name}</td>
                         <td>{coach.specialty || '—'}</td>
                         <td className="mono-text">
                           {coach.professional_fee ? `₱${Number(coach.professional_fee).toFixed(2)}` : '—'}
-                        </td>
-                        <td className="mono-text">
-                          <span className={`fee-status ${collected >= (coach.professional_fee || 0) && coach.professional_fee ? 'paid' : ''}`}>
-                            ₱{collected.toFixed(2)}
-                            {coach.professional_fee ? ` / ₱${Number(coach.professional_fee).toFixed(2)}` : ''}
-                          </span>
                         </td>
                         <td>
                           <div className="coach-actions">
@@ -344,10 +441,11 @@ function Coach() {
             <label>Select Coach</label>
             <select
               className="input"
-              value={selectedCoachForMembers || ''}
-              onChange={(e) => handleCoachSelectForMembers(Number(e.target.value))}
+              value={selectedCoachForMembers !== null ? String(selectedCoachForMembers) : ''}
+              onChange={(e) => handleCoachSelectForMembers(e.target.value)}
             >
               <option value="">— Choose a coach —</option>
+              <option value="-1">👤 Unassigned Members ({unassignedMembers.length})</option>
               {coaches.map((coach) => (
                 <option key={coach.id} value={coach.id}>
                   {coach.name}
@@ -356,7 +454,7 @@ function Coach() {
             </select>
           </div>
 
-          {selectedCoachForMembers ? (
+          {selectedCoachForMembers !== null ? (
             <div className="coach-table-container" style={{ marginTop: 20 }}>
               <table className="coach-table">
                 <thead>
@@ -367,17 +465,20 @@ function Coach() {
                     <th>Status</th>
                     <th>Coaching Start</th>
                     <th>Coaching End</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {coachMembers.length === 0 ? (
+                  {(selectedCoachForMembers === -1 ? unassignedMembers : coachMembers).length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="empty-row">
-                        No members assigned to this coach
+                      <td colSpan={7} className="empty-row">
+                        {selectedCoachForMembers === -1
+                          ? 'All members are assigned to a coach'
+                          : 'No members assigned to this coach'}
                       </td>
                     </tr>
                   ) : (
-                    coachMembers.map((member) => (
+                    (selectedCoachForMembers === -1 ? unassignedMembers : coachMembers).map((member) => (
                       <tr key={member.id}>
                         <td className="mono-text">{member.member_id}</td>
                         <td>{member.name}</td>
@@ -396,6 +497,19 @@ function Coach() {
                           {member.coaching_end
                             ? new Date(member.coaching_end).toLocaleDateString()
                             : '—'}
+                        </td>
+                        <td>
+                          <div className="coach-actions">
+                            {selectedCoachForMembers === -1 && (
+                              <button
+                                className="btn-icon enroll-icon"
+                                onClick={() => openEnrollModal(member)}
+                                title="Enroll to Coach"
+                              >
+                                👤+
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -616,7 +730,7 @@ function Coach() {
         </div>
       )}
 
-      {/* Fee Payments Modal */}
+{/* Fee Payments Modal */}
       {showFeeModal && feeCoachId && (
         <div className="modal-overlay">
           <div className="modal modal-fee" onClick={(e) => e.stopPropagation()}>
@@ -724,6 +838,152 @@ function Coach() {
                   </table>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enroll to Coach Modal */}
+      {showEnrollModal && enrollMember && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">Enroll to Coach — {enrollMember.name}</h2>
+              <button className="btn-icon" onClick={() => setShowEnrollModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Coach *</label>
+                  <select
+                    className="input"
+                    value={enrollForm.coach_id}
+                    onChange={(e) => setEnrollForm({ ...enrollForm, coach_id: Number(e.target.value) })}
+                  >
+                    <option value={0}>— Select coach —</option>
+                    {coaches.map((coach) => (
+                      <option key={coach.id} value={coach.id}>
+                        {coach.name}
+                      </option>
+                    ))}
+                  </select>
+                  {enrollForm.coach_id > 0 && (() => {
+                    const selectedCoach = coaches.find(c => c.id === enrollForm.coach_id)
+                    return selectedCoach?.professional_fee ? (
+                      <div className="enroll-coach-fee-display">
+                        <span className="enroll-coach-fee-label">Professional Fee</span>
+                        <span className="enroll-coach-fee-amount">₱{Number(selectedCoach.professional_fee).toFixed(2)}</span>
+                      </div>
+                    ) : selectedCoach ? (
+                      <div className="enroll-coach-fee-display">
+                        <span className="enroll-coach-fee-label">Professional Fee</span>
+                        <span className="enroll-coach-fee-none">No fee set</span>
+                      </div>
+                    ) : null
+                  })()}
+                </div>
+                <div className="form-group">
+                  <label>Coaching Start</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={enrollForm.coaching_start}
+                    onChange={(e) => {
+                      const newStart = e.target.value
+                      setEnrollForm({
+                        ...enrollForm,
+                        coaching_start: newStart,
+                        coaching_end: addOneMonth(newStart),
+                      })
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Coaching End</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={enrollForm.coaching_end}
+                    onChange={(e) => setEnrollForm({ ...enrollForm, coaching_end: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              {/* Coach Fee Payment Section */}
+              <div className="enroll-payment-section" style={{ marginTop: 24 }}>
+                <div className="enroll-payment-header">
+                  <span className="section-label" style={{ margin: 0 }}>💰 Coach Fee Payment</span>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      const coach = coaches.find(c => c.id === enrollForm.coach_id)
+                      setEnrollForm({
+                        ...enrollForm,
+                        record_payment: true,
+                        payment_amount: coach?.professional_fee ? String(coach.professional_fee) : ''
+                      })
+                    }}
+                    disabled={enrollForm.record_payment}
+                  >
+                    + Add Payment
+                  </button>
+                </div>
+                {enrollForm.record_payment && (
+                  <div className="enroll-payment-form" style={{ marginTop: 12 }}>
+                    <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr auto' }}>
+                      <div className="form-group">
+                        <label>Amount (₱)</label>
+                        <input
+                          type="number"
+                          className="input"
+                          value={enrollForm.payment_amount}
+                          onChange={(e) => setEnrollForm({ ...enrollForm, payment_amount: e.target.value })}
+                          placeholder="0.00"
+                          step="0.01"
+                          min="0"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Notes</label>
+                        <input
+                          type="text"
+                          className="input"
+                          value={enrollForm.payment_notes}
+                          onChange={(e) => setEnrollForm({ ...enrollForm, payment_notes: e.target.value })}
+                          placeholder="Optional note"
+                        />
+                      </div>
+                      <div className="form-group" style={{ justifyContent: 'flex-end' }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setEnrollForm({ ...enrollForm, record_payment: false, payment_amount: '', payment_notes: '' })}
+                          style={{ marginTop: 22 }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {!enrollForm.record_payment && (
+                  <p className="enroll-payment-muted" style={{ color: 'var(--text-faint)', fontSize: 13, marginTop: 8 }}>
+                    Optionally record a coach fee payment when enrolling.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowEnrollModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleEnrollToCoach}
+                disabled={!enrollForm.coach_id}
+              >
+                Enroll to Coach
+              </button>
             </div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 {
   "name": "repcheck",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "REPCHECK - Fingerprint Gym Check-In System",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -12,10 +12,12 @@
     "electron:build": "vite build && electron-builder"
   },
   "dependencies": {
+    "@digitalpersona/fingerprint": "^1.0.0",
     "adm-zip": "^0.6.0",
     "better-sqlite3": "^11.10.0",
     "electron-is-dev": "^2.0.0",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "nodemailer": "^9.0.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",

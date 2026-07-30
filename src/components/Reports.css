@@ -609,76 +609,170 @@
 
 /* ── Print styles ── */
 @media print {
+  /* Fallback: used only if standalone print window fails (popup blocked) */
+  @page {
+    size: A4 portrait;
+    margin: 15mm 12mm;
+  }
+
+  html, body {
+    height: auto;
+    overflow: visible;
+    background: #fff !important;
+  }
+
+  .app {
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .app-content {
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .main-content {
+    overflow: visible !important;
+    display: block !important;
+  }
+
   .reports-page {
     padding: 0;
-    background: #fff;
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
   }
 
   .reports-scroll {
-    overflow: visible;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    display: block !important;
   }
 
   .topbar-actions,
   .reports-controls,
   .reports-scroll::-webkit-scrollbar,
   .sidebar,
-  .titlebar {
+  .titlebar,
+  .right-panel,
+  .app-kiosk-mode {
     display: none !important;
   }
 
   .stat-card {
-    background: #f5f5f5;
-    border-color: #ddd;
+    background: #f5f5f5 !important;
+    border: 1px solid #ddd !important;
     break-inside: avoid;
+    page-break-inside: avoid;
   }
 
-  .stat-number,
-  .stat-label,
-  .stat-sub {
-    color: #222 !important;
-  }
+  .stat-number { color: #222 !important; }
+  .stat-label, .stat-sub { color: #555 !important; }
+  .stat-sub.positive { color: #2e7d32 !important; }
+  .stat-sub.negative { color: #c62828 !important; }
 
-  .breakdown-panel,
-  .report-table-section,
-  .outstanding-section {
-    background: #fafafa;
-    border-color: #ddd;
+  .breakdown-grid { page-break-inside: avoid; }
+  .breakdown-panel {
+    background: #fafafa !important;
+    border: 1px solid #ddd !important;
     break-inside: avoid;
+    page-break-inside: avoid;
   }
 
-  .report-table th {
-    background: #eee;
-    color: #333;
+  .panel-title { color: #333 !important; }
+
+  .report-table-section {
+    background: #fafafa !important;
+    border: 1px solid #ddd !important;
   }
 
-  .report-table td {
-    color: #333;
-  }
-
-  .report-table tbody tr.row-flagged {
-    background: #fff0f0;
-  }
-
-  .type-tag {
-    border: 1px solid #ccc;
-  }
-
-  .trend-bar-fill {
-    background: #333 !important;
-  }
-
-  .breakdown-bar-fill {
-    background: #666 !important;
-  }
+  .report-table thead { display: table-header-group; }
+  .report-table th { background: #eee !important; color: #333 !important; }
+  .report-table td { color: #333 !important; }
 
   .outstanding-section {
-    border-color: #ffc0c0;
+    background: #fafafa !important;
+    border: 1px solid #e0b0b0 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
+}
 
-  .outstanding-item {
-    background: #fff5f5;
-    border-color: #ffd0d0;
-  }
+/* ── Email Modal ── */
+.reports-email-modal {
+  width: 480px;
+}
+
+.reports-email-modal .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reports-email-modal .form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.reports-email-report-info {
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.reports-email-report-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.reports-email-result {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reports-email-result.success {
+  background: rgba(198, 255, 61, 0.08);
+  border: 1px solid rgba(198, 255, 61, 0.2);
+  color: var(--accent);
+}
+
+.reports-email-result.error {
+  background: rgba(255, 92, 92, 0.08);
+  border: 1px solid rgba(255, 92, 92, 0.2);
+  color: var(--danger);
+}
+
+.reports-email-path {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.reports-email-path code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.reports-email-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 @media (max-width: 1100px) {

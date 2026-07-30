@@ -4,17 +4,19 @@ import Sidebar from './components/Sidebar'
 import Kiosk from './components/Kiosk'
 import Dashboard from './components/Dashboard'
 import Activation from './components/Activation'
+import Login from './components/Login'
 import RightPanel from './components/RightPanel'
 import Members from './components/Members'
 import Plans from './components/Plans'
 import Checkins from './components/Checkins'
 import Settings from './components/Settings'
 import Coach from './components/Coach'
+import Users from './components/Users'
 import ActivityLog from './components/ActivityLog'
 import Reports from './components/Reports'
-import { Member, TodayStats, Checkin } from './types/electron'
+import { Member, TodayStats, Checkin, StaffUser } from './types/electron'
 
-type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings'
+type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings' | 'users'
 
 // Check if we're running in kiosk mode (separate window on external monitor)
 const isKioskMode = () => {
@@ -27,6 +29,7 @@ const isKioskMode = () => {
 
 function App() {
   const [activated, setActivated] = useState<boolean | null>(null)
+  const [loggedInUser, setLoggedInUser] = useState<StaffUser | null>(null)
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
   const [appName, setAppName] = useState('REPCHECK')
   const [appLogo, setAppLogo] = useState('')
@@ -51,6 +54,15 @@ function App() {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
+
+  const handleLogin = (user: StaffUser) => {
+    setLoggedInUser(user)
+    setActiveScreen('kiosk')
+  }
+
+  const handleLogout = () => {
+    setLoggedInUser(null)
+  }
 
   const checkActivation = async () => {
     try {
@@ -127,19 +139,21 @@ function App() {
           />
         )
       case 'members':
-        return <Members />
+        return <Members currentUser={loggedInUser} />
       case 'coach':
         return <Coach />
       case 'plans':
-        return <Plans />
+        return <Plans currentUser={loggedInUser} />
       case 'checkins':
         return <Checkins />
       case 'activitylog':
         return <ActivityLog />
       case 'reports':
-        return <Reports />
+        return <Reports appName={appName} />
+      case 'users':
+        return <Users />
       case 'settings':
-        return <Settings onAppNameChange={handleAppNameChange} onAppLogoChange={handleAppLogoChange} />
+        return <Settings currentUser={loggedInUser} onAppNameChange={handleAppNameChange} onAppLogoChange={handleAppLogoChange} />
       default:
         return <Kiosk onRefresh={loadData} />
     }
@@ -176,6 +190,15 @@ function App() {
     )
   }
 
+  // Not logged in — show login screen
+  if (!loggedInUser) {
+    return (
+      <div className="app">
+        <Login onLogin={handleLogin} />
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       {/* Custom titlebar */}
@@ -200,6 +223,8 @@ function App() {
           onNavigate={setActiveScreen}
           appLogo={appLogo}
           appName={appName}
+          currentUser={loggedInUser}
+          onLogout={handleLogout}
         />
 
         {/* Main Content */}

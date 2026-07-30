@@ -32,6 +32,7 @@ const ACTION_META: Record<string, { label: string; icon: string; category: Actio
   update_settings: { label: 'Settings Updated', icon: '⚙️', category: 'settings', verb: 'updated settings' },
   upload_logo: { label: 'Logo Uploaded', icon: '🖼️', category: 'settings', verb: 'uploaded logo' },
   remove_logo: { label: 'Logo Removed', icon: '🗑️', category: 'settings', verb: 'removed logo' },
+  waiver_signed: { label: 'Waiver Signed', icon: '📄', category: 'member', verb: 'signed waiver for' },
   create_backup: { label: 'Backup Created', icon: '📦', category: 'settings', verb: 'created backup' },
   restore_backup: { label: 'Backup Restored', icon: '🔄', category: 'settings', verb: 'restored backup' },
 }

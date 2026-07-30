@@ -2,9 +2,21 @@ import React, { useState, useEffect, useCallback } from 'react'
 import './Reports.css'
 import { DailyReport, MonthlyReport } from '../types/electron'
 
+interface EmailResult {
+  success: boolean
+  filePath?: string
+  message?: string
+}
+
 type ReportView = 'daily' | 'monthly'
 
-function Reports() {
+interface ReportsProps {
+  appName?: string
+}
+
+function Reports({ appName = 'REPCHECK' }: ReportsProps) {
+  // Sanitized filename prefix derived from the app name
+  const filePrefix = appName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'repcheck'
   const [view, setView] = useState<ReportView>('daily')
 
   const switchView = (v: ReportView) => {
@@ -22,6 +34,10 @@ function Reports() {
 
   const [loading, setLoading] = useState(false)
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [showEmailModal, setShowEmailModal] = useState(false)
+  const [emailRecipient, setEmailRecipient] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailResult, setEmailResult] = useState<EmailResult | null>(null)
 
   // ── Load data ──
   const loadDaily = useCallback(async (date: string) => {
@@ -133,61 +149,594 @@ function Reports() {
     )
   }
 
-  // ── CSV Export ──
-  const exportCSV = () => {
-    if (view === 'daily' && dailyReport) {
-      const rows = [
-        ['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Amount', 'Time'],
-        ...dailyReport.transactions.map(t => [
-          t.member_name || '',
-          t.member_code || '',
-          t.plan_name || '',
-          t.type,
-          t.payment_method || '',
-          t.amount.toFixed(2),
-          fmtTime(t.created_at),
-        ]),
-      ]
-      const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-      const blob = new Blob([csv], { type: 'text/csv' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `repcheck-daily-${dailyReport.date}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
-    } else if (view === 'monthly' && monthlyReport) {
-      // Monthly CSV: summary + plan type breakdown
-      const rows = [
-        ['Metric', 'Value'],
-        ['Year-Month', monthlyReport.yearMonth],
-        ['Total Revenue', monthlyReport.totalRevenue.toFixed(2)],
-        ['Previous Month Revenue', monthlyReport.previousMonthRevenue.toFixed(2)],
-        ['Change (%)', monthlyReport.percentChange.toFixed(1)],
-        ['New Members', String(monthlyReport.newMembers)],
-        ['Renewals', String(monthlyReport.renewals)],
-        ['Churned', String(monthlyReport.churned)],
-        ['Avg Revenue / Active Member', monthlyReport.avgRevenuePerMember.toFixed(2)],
-        [],
-        ['Plan Type', 'Count', 'Total'],
-        ...monthlyReport.byPlanType.map(p => [p.plan_type, String(p.count), p.total.toFixed(2)]),
-        [],
-        ['Payment Method', 'Count', 'Total'],
-        ...monthlyReport.byMethod.map(m => [m.payment_method, String(m.count), m.total.toFixed(2)]),
-      ]
-      const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-      const blob = new Blob([csv], { type: 'text/csv' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `repcheck-monthly-${monthlyReport.yearMonth}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
+  // ── Styled Excel Export (.xls with HTML formatting) ──
+  // Uses HTML table with inline CSS saved as .xls
+  // Excel opens HTML .xls files with full styling (colors, fonts, borders)
+  const exportExcel = () => {
+    const now = new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    // Build a styled HTML table from data
+    // Cells starting with '<' are treated as raw HTML (not escaped)
+    const style = `<style>
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; color: #222; padding: 20px; }
+      h1 { font-size: 16pt; font-weight: 700; text-align: center; margin: 0 0 4px; color: #1a1a2e; }
+      .subtitle { text-align: center; font-size: 10pt; color: #666; margin-bottom: 16px; }
+      .section-title { font-size: 11pt; font-weight: 700; color: #1a1a2e; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #1a1a2e; }
+
+      /* Stat cards — table layout for Excel compatibility */
+      .stat-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; table-layout: fixed; }
+      .stat-table td { width: 25%; padding: 10px 12px; border: 1px solid #dde1e6; text-align: center; background: #f5f7fa; vertical-align: top; }
+      .stat-num { font-size: 18pt; font-weight: 700; line-height: 1.1; }
+      .stat-green { color: #2e7d32; } .stat-blue { color: #1565c0; } .stat-orange { color: #e65100; } .stat-red { color: #c62828; }
+      .stat-lbl { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-top: 2px; }
+      .stat-sub { font-size: 7.5pt; color: #888; }
+      .stat-up { color: #2e7d32; } .stat-down { color: #c62828; }
+
+      /* Tables */
+      table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+      th { padding: 6px 8px; text-align: left; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #fff; background: #1a1a2e; border: 1px solid #1a1a2e; }
+      td { padding: 5px 8px; border: 1px solid #dde1e6; vertical-align: middle; font-size: 9pt; }
+      tr:nth-child(even) { background: #f8f9fb; }
+      tr.total-row td { font-weight: 700; border-top: 2px solid #1a1a2e; background: #eef0f4; }
+      tr.flagged td { background: #fff5f5; }
+      .mono { font-family: 'Consolas', 'Courier New', monospace; font-size: 8.5pt; }
+      .amt { text-align: right; font-weight: 600; }
+      .danger { color: #c62828; font-weight: 700; }
+
+      .tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 7pt; font-weight: 700; }
+      .tag-new { background: #e8f5e9; color: #2e7d32; }
+      .tag-renewal { background: #e3f2fd; color: #1565c0; }
+      .tag-pack { background: #fff3e0; color: #e65100; }
+
+      .footer { text-align: center; font-size: 8pt; color: #999; margin-top: 16px; border-top: 1px solid #dde1e6; padding-top: 8px; }
+      .summary-table td { border: none; padding: 4px 8px; font-size: 9pt; }
+      .summary-table td:last-child { text-align: right; font-weight: 600; }
+    </style>`
+
+    const esc = (s: string | undefined | null): string => {
+      if (!s) return ''
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     }
+
+    // ── Helper: stat cards HTML (table layout for reliable Excel rendering) ──
+    const buildStatCards = (items: { num: string; label: string; sub: string; cls: string }[]) =>
+      `<table class="stat-table"><tr>${items.map(i =>
+        `<td><div class="stat-num ${i.cls}">${esc(i.num)}</div><div class="stat-lbl">${i.label}</div><div class="stat-sub">${i.sub}</div></td>`
+      ).join('')}</tr></table>`
+
+    // ── Helper: data table HTML ──
+    // Cells starting with '<' are raw HTML (e.g. type tags, styled names); others are auto-escaped
+    const buildTable = (headers: string[], rows: string[][], totalRow?: string[]) => {
+      let html = '<table><thead><tr>'
+      for (const h of headers) html += `<th>${esc(h)}</th>`
+      html += '</tr></thead><tbody>'
+      for (const row of rows) {
+        html += '<tr>'
+        for (const cell of row) {
+          if (cell.length > 0 && cell[0] === '<') {
+            html += `<td>${cell}</td>`
+          } else {
+            html += `<td>${esc(cell)}</td>`
+          }
+        }
+        html += '</tr>'
+      }
+      if (totalRow) {
+        html += '<tr class="total-row">'
+        for (const cell of totalRow) {
+          if (cell.length > 0 && cell[0] === '<') {
+            html += `<td>${cell}</td>`
+          } else {
+            html += `<td>${esc(cell)}</td>`
+          }
+        }
+        html += '</tr>'
+      }
+      html += '</tbody></table>'
+      return html
+    }
+
+    const typeTag = (type: string): string => {
+      const tagClass = type === 'new_plan' ? 'tag-new' : type === 'renewal' ? 'tag-renewal' : 'tag-pack'
+      const label = type === 'new_plan' ? 'New' : type === 'renewal' ? 'Renewal' : 'Pack'
+      return `<span class="tag ${tagClass}">${label}</span>`
+    }
+
+    let html: string
+    const daily = dailyReport
+    const monthly = monthlyReport
+
+    if (view === 'daily' && daily) {
+      html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${filePrefix}-daily-${daily.date}</title>${style}</head><body>
+
+<h1>${esc(appName)} — Daily Sales Report</h1>
+<div class="subtitle">${fmtDateLabel(daily.date)}</div>
+
+${buildStatCards([
+  { num: fmtCurrency(daily.totalRevenue), label: 'TOTAL REVENUE', sub: "Today's collections", cls: 'stat-green' },
+  { num: String(daily.newMembers), label: 'NEW ENROLLMENTS', sub: 'Members joined today', cls: 'stat-blue' },
+  { num: String(daily.renewals), label: 'RENEWALS', sub: 'Plans renewed today', cls: 'stat-orange' },
+  { num: String(daily.outstandingCount), label: 'OUTSTANDING', sub: 'Members with flagged balances', cls: 'stat-red' },
+])}
+
+<div class="section-title">Revenue by Plan Type</div>
+${buildTable(
+  ['Type', 'Transactions', 'Total'],
+  daily.byType.map(i => [i.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]),
+  ['Total', String(daily.byType.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)]
+)}
+
+<div class="section-title">Revenue by Payment Method</div>
+${buildTable(
+  ['Method', 'Transactions', 'Total'],
+  daily.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]),
+  ['Total', String(daily.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)]
+)}
+
+${daily.outstanding.length > 0 ? `
+<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances</div>
+${buildTable(
+  ['Member', 'Member ID', 'Balance'],
+  daily.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]),
+  ['Total Outstanding', '', fmtCurrency(daily.outstanding.reduce((s, o) => s + o.balance, 0))]
+)}` : ''}
+
+<div class="section-title">Transaction Details</div>
+${buildTable(
+  ['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Amount', 'Time'],
+  daily.transactions.map(t => {
+    const flagged = daily.outstanding.some(o => o.id === t.member_id)
+    return [
+      `<span${flagged ? ' style="color:#c62828;font-weight:600;"' : ''}>${esc(t.member_name || 'Unknown')}</span>`,
+      t.member_code || '',
+      t.plan_name || '—',
+      typeTag(t.type),
+      (t.payment_method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      fmtCurrency(t.amount),
+      fmtTime(t.created_at),
+    ]
+  }),
+  ['TOTAL', '', '', '', '', fmtCurrency(daily.totalRevenue), '']
+)}
+
+<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+</body></html>`
+    } else if (view === 'monthly' && monthly) {
+      html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${filePrefix}-monthly-${monthly.yearMonth}</title>${style}</head><body>
+
+<h1>${esc(appName)} — Monthly Sales Report</h1>
+<div class="subtitle">${fmtMonthLabel(monthly.yearMonth)}</div>
+
+${buildStatCards([
+  { num: fmtCurrency(monthly.totalRevenue), label: 'TOTAL REVENUE', sub: `${monthly.percentChange >= 0 ? '▲' : '▼'} ${fmtPct(monthly.percentChange)} vs last month`, cls: 'stat-green' },
+  { num: String(monthly.newMembers), label: 'NEW MEMBERS', sub: 'Joined this month', cls: 'stat-blue' },
+  { num: String(monthly.renewals), label: 'RENEWALS', sub: 'Plans renewed this month', cls: 'stat-orange' },
+  { num: String(monthly.churned), label: 'CHURNED', sub: 'Members not renewed', cls: 'stat-red' },
+])}
+
+${monthly.weekly.length > 0 ? `
+<div class="section-title">Weekly Revenue Trend</div>
+${buildTable(
+  ['Week', 'Transactions', 'Total'],
+  monthly.weekly.map(w => [w.week, String(w.count), fmtCurrency(w.total)]),
+  ['Total', String(monthly.weekly.reduce((s, w) => s + w.count, 0)), fmtCurrency(monthly.totalRevenue)]
+)}` : ''}
+
+<div class="section-title">Revenue by Plan Type</div>
+${buildTable(
+  ['Plan Type', 'Count', 'Total'],
+  monthly.byPlanType.map(i => [i.plan_type === 'no_plan' ? 'No Plan' : i.plan_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]),
+  ['Total', String(monthly.byPlanType.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.totalRevenue)]
+)}
+
+<div class="section-title">Revenue by Payment Method</div>
+${buildTable(
+  ['Method', 'Count', 'Total'],
+  monthly.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]),
+  ['Total', String(monthly.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.byMethod.reduce((s, i) => s + i.total, 0))]
+)}
+
+${monthly.outstanding.length > 0 ? `
+<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances (as of Month-End)</div>
+${buildTable(
+  ['Member', 'Member ID', 'Balance'],
+  monthly.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]),
+  ['Total Outstanding', '', fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))]
+)}` : ''}
+
+<div class="section-title">Summary</div>
+<table class="summary-table">
+<tr><td><strong>Payment Methods</strong></td><td>${monthly.byMethod.map(m => `${m.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${fmtCurrency(m.total)}`).join('; ')}</td></tr>
+<tr><td><strong>Total Outstanding</strong></td><td class="danger">${fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))}</td></tr>
+<tr><td><strong>Avg Revenue / Active Member</strong></td><td>${fmtCurrency(monthly.avgRevenuePerMember)}</td></tr>
+<tr><td><strong>Active Member Count</strong></td><td>${monthly.activeMemberCount}</td></tr>
+</table>
+
+<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+</body></html>`
+    } else {
+      return
+    }
+
+    // Encode HTML as UTF-8 bytes + BOM for proper encoding
+    const encoder = new TextEncoder()
+    const bom = new Uint8Array([0xEF, 0xBB, 0xBF])
+    const utf8Bytes = encoder.encode(html)
+    const blob = new Blob([bom, utf8Bytes], { type: 'application/vnd.ms-excel;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const filename = view === 'daily' && dailyReport
+      ? `${filePrefix}-daily-${dailyReport.date}.xls`
+      : `${filePrefix}-monthly-${monthlyReport!.yearMonth}.xls`
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Simple HTML escaping for safe interpolation into standalone print document
+  const esc = (s: string | undefined | null): string => {
+    if (!s) return ''
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   }
 
   const exportPDF = () => {
-    window.print()
+    const r = view === 'daily' ? dailyReport : monthlyReport
+    if (!r) return
+
+    const isDaily = view === 'daily'
+    const dr = dailyReport as DailyReport
+    const mr = monthlyReport as MonthlyReport
+    const title = isDaily
+      ? `Daily Sales Report — ${fmtDateLabel(dr.date)}`
+      : `Monthly Sales Report — ${fmtMonthLabel(mr.yearMonth)}`
+
+    // ── Build stat cards HTML ──
+    const statCards = isDaily
+      ? `
+        <div class="stat-row">
+          <div class="stat-card">
+            <div class="stat-num accent">${esc(fmtCurrency(dr.totalRevenue))}</div>
+            <div class="stat-lbl">Total Revenue</div>
+            <div class="stat-sub">Today's collections</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num info">${dr.newMembers}</div>
+            <div class="stat-lbl">New Enrollments</div>
+            <div class="stat-sub">Members joined today</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num warn">${dr.renewals}</div>
+            <div class="stat-lbl">Renewals</div>
+            <div class="stat-sub">Plans renewed today</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num danger">${dr.outstandingCount}</div>
+            <div class="stat-lbl">Outstanding</div>
+            <div class="stat-sub">Members with flagged balances</div>
+          </div>
+        </div>`
+      : `
+        <div class="stat-row">
+          <div class="stat-card">
+            <div class="stat-num accent">${esc(fmtCurrency(mr.totalRevenue))}</div>
+            <div class="stat-lbl">Total Revenue</div>
+            <div class="stat-sub ${mr.percentChange >= 0 ? 'positive' : 'negative'}">${mr.percentChange >= 0 ? '▲' : '▼'} ${esc(fmtPct(mr.percentChange))} vs last month</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num info">${mr.newMembers}</div>
+            <div class="stat-lbl">New Members</div>
+            <div class="stat-sub">Joined this month</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num warn">${mr.renewals}</div>
+            <div class="stat-lbl">Renewals</div>
+            <div class="stat-sub">Plans renewed this month</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num danger">${mr.churned}</div>
+            <div class="stat-lbl">Churned</div>
+            <div class="stat-sub">Members not renewed</div>
+          </div>
+        </div>`
+
+    // ── Build breakdown bars HTML ──
+    const buildBreakdown = (items: { label: string; amount: number; total: number }[]) =>
+      items.map(item => {
+        const pct = item.total > 0 ? (item.amount / item.total) * 100 : 0
+        return `
+          <div class="bb-row">
+            <div class="bb-label">
+              <span class="bb-name">${esc(item.label)}</span>
+              <span class="bb-amount">${esc(fmtCurrency(item.amount))}</span>
+            </div>
+            <div class="bb-track"><div class="bb-fill" style="width:${Math.max(pct, 1)}%"></div></div>
+            <span class="bb-pct">${pct.toFixed(1)}%</span>
+          </div>`
+      }).join('')
+
+    // Daily breakdowns
+    const planBreakdown = isDaily
+      ? buildBreakdown(dr.byType.map(i => ({ label: i.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), amount: i.total, total: dr.totalRevenue })))
+      : buildBreakdown(mr.byPlanType.map(i => ({
+        label: i.plan_type === 'no_plan' ? 'No Plan' : i.plan_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        amount: i.total,
+        total: mr.totalRevenue,
+      })))
+
+    const methodBreakdown = isDaily
+      ? buildBreakdown(dr.byMethod.map(i => ({ label: i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), amount: i.total, total: dr.totalRevenue })))
+      : buildBreakdown(mr.byMethod.map(i => ({ label: i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), amount: i.total, total: mr.totalRevenue })))
+
+    // ── Weekly trend (monthly only) ──
+    const weeklyTrend = !isDaily && mr.weekly.length > 0
+      ? `<div class="section">
+          <h2 class="section-title">Weekly Revenue Trend</h2>
+          <table class="data-table">
+            <thead><tr><th>Week</th><th>Transactions</th><th>Total</th></tr></thead>
+            <tbody>
+              ${mr.weekly.map(w => `<tr><td>${w.week}</td><td>${w.count}</td><td class="mono">${fmtCurrency(w.total)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : ''
+
+    // ── Outstanding (daily) ──
+    const outstandingSection = isDaily && dr.outstanding.length > 0
+      ? `<div class="section outstanding">
+          <h2 class="section-title">Outstanding Balances — Checked in Today (${dr.outstandingCount} member${dr.outstandingCount !== 1 ? 's' : ''})</h2>
+          <table class="data-table">
+            <thead><tr><th>Member</th><th>ID</th><th>Balance</th></tr></thead>
+            <tbody>
+              ${dr.outstanding.map(o => `<tr><td>${o.name}</td><td class="mono">${o.member_id}</td><td class="mono danger">${fmtCurrency(o.balance)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : ''
+
+    // ── Outstanding (monthly) ──
+    const monthlyOutstanding = !isDaily && mr.outstanding.length > 0
+      ? `<div class="section outstanding">
+          <h2 class="section-title">Outstanding Balances as of Month-End</h2>
+          <table class="data-table">
+            <thead><tr><th>Member</th><th>ID</th><th>Balance</th></tr></thead>
+            <tbody>
+              ${mr.outstanding.map(o => `<tr><td>${o.name}</td><td class="mono">${o.member_id}</td><td class="mono danger">${fmtCurrency(o.balance)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : ''
+
+    // ── Transaction details table (daily only) ──
+    const transactionTable = isDaily && dr.transactions.length > 0
+      ? `<div class="section">
+          <h2 class="section-title">Transaction Details</h2>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>ID</th>
+                <th>Plan</th>
+                <th>Type</th>
+                <th>Method</th>
+                <th class="amt">Amount</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${dr.transactions.map(t => {
+                const flagged = dr.outstanding.some(o => o.id === t.member_id)
+                const typeLabel = t.type === 'new_plan' ? 'New' : t.type === 'renewal' ? 'Renewal' : 'Pack'
+                return `<tr class="${flagged ? 'flagged' : ''}">
+                  <td>${t.member_name || 'Unknown'}</td>
+                  <td class="mono">${t.member_code || ''}</td>
+                  <td>${t.plan_name || '—'}</td>
+                  <td><span class="tag tag-${t.type}">${typeLabel}</span></td>
+                  <td>${(t.payment_method || 'cash').replace(/_/g, ' ')}</td>
+                  <td class="mono amt">${fmtCurrency(t.amount)}</td>
+                  <td class="mono">${fmtTime(t.created_at)}</td>
+                </tr>`
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : ''
+
+    // ── Monthly summary meta ──
+    const monthlyMeta = !isDaily
+      ? `<div class="section">
+          <h2 class="section-title">Summary</h2>
+          <table class="data-table">
+            <tbody>
+              <tr><td><strong>Payment Methods</strong></td><td>${mr.byMethod.map(m => `${m.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${fmtCurrency(m.total)}`).join(', ')}</td></tr>
+              <tr><td><strong>Total Outstanding</strong></td><td class="mono danger">${fmtCurrency(mr.outstanding.reduce((s, o) => s + o.balance, 0))}</td></tr>
+              <tr><td><strong>Avg Revenue / Active Member</strong></td><td class="mono">${fmtCurrency(mr.avgRevenuePerMember)}</td></tr>
+              <tr><td><strong>Active Member Count</strong></td><td class="mono">${mr.activeMemberCount}</td></tr>
+            </tbody>
+          </table>
+        </div>`
+      : ''
+
+    // ── Build the PDF filename for Save-as-PDF — matches CSV naming ──
+    const pdfFilename = isDaily
+      ? `${filePrefix}-daily-${dr.date}`
+      : `${filePrefix}-monthly-${mr.yearMonth}`
+
+    // ── Assemble full HTML ──
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${pdfFilename}</title>
+<style>
+  @page { size: A4 portrait; margin: 15mm 12mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif;
+    font-size: 11pt;
+    color: #222;
+    line-height: 1.5;
+    padding: 0;
+  }
+  .report-header {
+    text-align: center;
+    padding-bottom: 10px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #333;
+  }
+  .report-header h1 { font-size: 18pt; font-weight: 700; letter-spacing: -0.3px; }
+  .report-header .date { font-size: 10pt; color: #666; margin-top: 4px; }
+
+  .section {
+    margin-bottom: 16px;
+    page-break-inside: avoid;
+  }
+  .section-title {
+    font-size: 12pt;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #ccc;
+  }
+
+  /* Stat cards */
+  .stat-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    page-break-inside: avoid;
+  }
+  .stat-card {
+    flex: 1;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .stat-num { font-size: 20pt; font-weight: 700; line-height: 1.1; }
+  .stat-num.accent { color: #2e7d32; }
+  .stat-num.info { color: #1565c0; }
+  .stat-num.warn { color: #e65100; }
+  .stat-num.danger { color: #c62828; }
+  .stat-lbl { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-top: 2px; }
+  .stat-sub { font-size: 7.5pt; color: #888; }
+  .stat-sub.positive { color: #2e7d32; }
+  .stat-sub.negative { color: #c62828; }
+
+  /* Breakdown bars */
+  .bb-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .bb-label { min-width: 100px; flex-shrink: 0; }
+  .bb-name { display: block; font-size: 10pt; font-weight: 500; }
+  .bb-amount { display: block; font-size: 8pt; color: #666; }
+  .bb-track {
+    flex: 1;
+    height: 12px;
+    background: #e0e0e0;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .bb-fill { height: 100%; background: #555; border-radius: 6px; min-width: 2px; }
+  .bb-pct { font-size: 8pt; color: #666; min-width: 40px; text-align: right; font-family: 'Consolas', monospace; }
+
+  /* Tables */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+    page-break-inside: auto;
+  }
+  .data-table thead { display: table-header-group; }
+  .data-table tbody { page-break-inside: auto; }
+  .data-table tr { page-break-inside: avoid; }
+  .data-table th {
+    padding: 6px 8px;
+    text-align: left;
+    font-size: 7pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #555;
+    border-bottom: 2px solid #ccc;
+    background: #f0f0f0;
+  }
+  .data-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #e0e0e0;
+    vertical-align: middle;
+  }
+  .data-table .mono { font-family: 'Consolas', 'Courier New', monospace; font-size: 8.5pt; }
+  .data-table .amt { text-align: right; }
+  .data-table .danger { color: #c62828; font-weight: 700; }
+  .data-table tr.flagged { background: #fff5f5; }
+
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 7pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    border: 1px solid #ccc;
+    background: #f0f0f0;
+    color: #333;
+  }
+
+  .outstanding .section-title { color: #c62828; }
+
+  .footer {
+    text-align: center;
+    font-size: 8pt;
+    color: #999;
+    margin-top: 24px;
+    padding-top: 8px;
+    border-top: 1px solid #ddd;
+  }
+</style>
+</head>
+<body>
+  <div class="report-header">
+    <h1>${title}</h1>
+    <div class="date">Generated ${new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+  </div>
+
+  ${statCards}
+
+  <div class="section">
+    <h2 class="section-title">Revenue by Plan Type</h2>
+    <div class="bb-list">${planBreakdown}</div>
+  </div>
+
+  <div class="section">
+    <h2 class="section-title">Revenue by Payment Method</h2>
+    <div class="bb-list">${methodBreakdown}</div>
+  </div>
+
+  ${weeklyTrend}
+  ${monthlyMeta}
+  ${outstandingSection}
+  ${monthlyOutstanding}
+  ${transactionTable}
+
+  <div class="footer">${esc(appName)} — ${title}</div>
+</body>
+</html>`
+
+    const printWin = window.open('', '_blank', 'width=800,height=600')
+    if (!printWin) {
+      alert('Please allow pop-ups to print the report.')
+      return
+    }
+    printWin.document.write(html)
+    printWin.document.close()
+    printWin.focus()
+    printWin.print()
   }
 
   // ── Payment method colors ──
@@ -233,11 +782,14 @@ function Reports() {
       <div className="reports-topbar">
         <h1 className="display-text page-title">Reports</h1>
         <div className="topbar-actions">
-          <button className="btn btn-secondary btn-sm" onClick={exportCSV} title="Export as CSV">
-            📄 CSV
+          <button className="btn btn-secondary btn-sm" onClick={exportExcel} title="Export as styled Excel spreadsheet">
+            📊 XLS
           </button>
           <button className="btn btn-primary btn-sm" onClick={exportPDF} title="Print / Export as PDF">
             🖨️ PDF
+          </button>
+          <button className="btn btn-sm" onClick={() => { setEmailRecipient(''); setEmailResult(null); setShowEmailModal(true) }} title="Send report via email" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+            📧 Email
           </button>
         </div>
       </div>
@@ -552,6 +1104,219 @@ function Reports() {
           </>
         )}
       </div>
+
+      {/* ── Email Report Modal ── */}
+      {showEmailModal && (
+        <div className="modal-overlay" onClick={() => setShowEmailModal(false)}>
+          <div className="modal reports-email-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">📧 Email Report</h2>
+              <button className="btn-icon" onClick={() => setShowEmailModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Recipient Email</label>
+                <input
+                  type="email"
+                  className="input"
+                  value={emailRecipient}
+                  onChange={(e) => { setEmailRecipient(e.target.value); setEmailResult(null) }}
+                  placeholder="email@example.com"
+                  autoFocus
+                  disabled={emailSending}
+                />
+              </div>
+              <div className="form-group" style={{ marginTop: 12 }}>
+                <label>Report</label>
+                <div className="reports-email-report-info">
+                  <span className="reports-email-report-name">
+                    {view === 'daily'
+                      ? `Daily Sales Report — ${fmtDateLabel(dailyDate)}`
+                      : `Monthly Sales Report — ${fmtMonthLabel(monthYear)}`
+                    }
+                  </span>
+                </div>
+              </div>
+
+              {emailResult && (
+                <div className={`reports-email-result ${emailResult.success ? 'success' : 'error'}`}>
+                  {emailResult.success ? (
+                    <>
+                      <span>✅ {emailResult.message || 'Email sent successfully!'}</span>
+                    </>
+                  ) : (
+                    <span>
+                      ❌ {emailResult.message || 'Failed to send report.'}
+                      <p className="reports-email-hint">
+                        Make sure SMTP is configured in Settings.
+                      </p>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowEmailModal(false)} disabled={emailSending}>
+                {emailResult?.success ? 'Close' : 'Cancel'}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  if (!emailRecipient.trim()) return
+                  setEmailSending(true)
+                  setEmailResult(null)
+
+                  try {
+                    // Generate the same HTML as the Excel export
+                    const r = view === 'daily' ? dailyReport : monthlyReport
+                    if (!r) return
+
+                    // Build the report HTML using the shared style
+                    const now = new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    const style = `<style>
+                      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; color: #222; padding: 20px; }
+                      h1 { font-size: 16pt; font-weight: 700; text-align: center; margin: 0 0 4px; color: #1a1a2e; }
+                      .subtitle { text-align: center; font-size: 10pt; color: #666; margin-bottom: 16px; }
+                      .section-title { font-size: 11pt; font-weight: 700; color: #1a1a2e; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #1a1a2e; }
+                      .stat-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; table-layout: fixed; }
+                      .stat-table td { width: 25%; padding: 10px 12px; border: 1px solid #dde1e6; text-align: center; background: #f5f7fa; vertical-align: top; }
+                      .stat-num { font-size: 18pt; font-weight: 700; line-height: 1.1; }
+                      .stat-green { color: #2e7d32; } .stat-blue { color: #1565c0; } .stat-orange { color: #e65100; } .stat-red { color: #c62828; }
+                      .stat-lbl { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-top: 2px; }
+                      .stat-sub { font-size: 7.5pt; color: #888; }
+                      table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+                      th { padding: 6px 8px; text-align: left; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #fff; background: #1a1a2e; border: 1px solid #1a1a2e; }
+                      td { padding: 5px 8px; border: 1px solid #dde1e6; vertical-align: middle; font-size: 9pt; }
+                      tr:nth-child(even) { background: #f8f9fb; }
+                      tr.total-row td { font-weight: 700; border-top: 2px solid #1a1a2e; background: #eef0f4; }
+                      .mono { font-family: 'Consolas', 'Courier New', monospace; font-size: 8.5pt; }
+                      .amt { text-align: right; font-weight: 600; }
+                      .danger { color: #c62828; font-weight: 700; }
+                      .tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 7pt; font-weight: 700; }
+                      .tag-new { background: #e8f5e9; color: #2e7d32; }
+                      .tag-renewal { background: #e3f2fd; color: #1565c0; }
+                      .tag-pack { background: #fff3e0; color: #e65100; }
+                      .footer { text-align: center; font-size: 8pt; color: #999; margin-top: 16px; border-top: 1px solid #dde1e6; padding-top: 8px; }
+                    </style>`
+
+                    const buildStatCards = (items: { num: string; label: string; sub: string; cls: string }[]) =>
+                      `<table class="stat-table"><tr>${items.map(i =>
+                        `<td><div class="stat-num ${i.cls}">${esc(i.num)}</div><div class="stat-lbl">${i.label}</div><div class="stat-sub">${i.sub}</div></td>`
+                      ).join('')}</tr></table>`
+
+                    const buildTable = (headers: string[], rows: string[][], totalRow?: string[]) => {
+                      let html = '<table><thead><tr>'
+                      for (const h of headers) html += `<th>${esc(h)}</th>`
+                      html += '</tr></thead><tbody>'
+                      for (const row of rows) {
+                        html += '<tr>'
+                        for (const cell of row) {
+                          html += `<td>${cell.length > 0 && cell[0] === '<' ? cell : esc(cell)}</td>`
+                        }
+                        html += '</tr>'
+                      }
+                      if (totalRow) {
+                        html += '<tr class="total-row">'
+                        for (const cell of totalRow) {
+                          html += `<td>${cell.length > 0 && cell[0] === '<' ? cell : esc(cell)}</td>`
+                        }
+                        html += '</tr>'
+                      }
+                      html += '</tbody></table>'
+                      return html
+                    }
+
+                    const typeTag = (type: string): string => {
+                      const tagClass = type === 'new_plan' ? 'tag-new' : type === 'renewal' ? 'tag-renewal' : 'tag-pack'
+                      const label = type === 'new_plan' ? 'New' : type === 'renewal' ? 'Renewal' : 'Pack'
+                      return `<span class="tag ${tagClass}">${label}</span>`
+                    }
+
+                    let html: string
+                    const emailFilename = view === 'daily' && dailyReport
+                      ? `${filePrefix}-daily-${dailyReport.date}.xls`
+                      : `${filePrefix}-monthly-${monthlyReport!.yearMonth}.xls`
+
+                    if (view === 'daily' && dailyReport) {
+                      const daily = dailyReport
+                      html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${filePrefix}-daily-${daily.date}</title>${style}</head><body>
+<h1>${esc(appName)} — Daily Sales Report</h1>
+<div class="subtitle">${fmtDateLabel(daily.date)}</div>
+${buildStatCards([
+  { num: fmtCurrency(daily.totalRevenue), label: 'TOTAL REVENUE', sub: "Today's collections", cls: 'stat-green' },
+  { num: String(daily.newMembers), label: 'NEW ENROLLMENTS', sub: 'Members joined today', cls: 'stat-blue' },
+  { num: String(daily.renewals), label: 'RENEWALS', sub: 'Plans renewed today', cls: 'stat-orange' },
+  { num: String(daily.outstandingCount), label: 'OUTSTANDING', sub: 'Members with flagged balances', cls: 'stat-red' },
+])}
+<div class="section-title">Revenue by Plan Type</div>
+${buildTable(['Type', 'Transactions', 'Total'], daily.byType.map(i => [i.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(daily.byType.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)])}
+<div class="section-title">Revenue by Payment Method</div>
+${buildTable(['Method', 'Transactions', 'Total'], daily.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(daily.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)])}
+${daily.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances</div>\n${buildTable(['Member', 'Member ID', 'Balance'], daily.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]), ['Total Outstanding', '', fmtCurrency(daily.outstanding.reduce((s, o) => s + o.balance, 0))])}` : ''}
+<div class="section-title">Transaction Details</div>
+${buildTable(['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Amount', 'Time'], daily.transactions.map(t => {
+  const flagged = daily.outstanding.some(o => o.id === t.member_id)
+  return [
+    `<span${flagged ? ' style="color:#c62828;font-weight:600;"' : ''}>${esc(t.member_name || 'Unknown')}</span>`,
+    t.member_code || '', t.plan_name || '—', typeTag(t.type),
+    (t.payment_method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    fmtCurrency(t.amount), fmtTime(t.created_at),
+  ]
+}), ['TOTAL', '', '', '', '', fmtCurrency(daily.totalRevenue), ''])}
+<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+</body></html>`
+                    } else if (view === 'monthly' && monthlyReport) {
+                      const monthly = monthlyReport
+                      html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${filePrefix}-monthly-${monthly.yearMonth}</title>${style}</head><body>
+<h1>${esc(appName)} — Monthly Sales Report</h1>
+<div class="subtitle">${fmtMonthLabel(monthly.yearMonth)}</div>
+${buildStatCards([
+  { num: fmtCurrency(monthly.totalRevenue), label: 'TOTAL REVENUE', sub: `${monthly.percentChange >= 0 ? '▲' : '▼'} ${fmtPct(monthly.percentChange)} vs last month`, cls: 'stat-green' },
+  { num: String(monthly.newMembers), label: 'NEW MEMBERS', sub: 'Joined this month', cls: 'stat-blue' },
+  { num: String(monthly.renewals), label: 'RENEWALS', sub: 'Plans renewed this month', cls: 'stat-orange' },
+  { num: String(monthly.churned), label: 'CHURNED', sub: 'Members not renewed', cls: 'stat-red' },
+])}
+${monthly.weekly.length > 0 ? `\n<div class="section-title">Weekly Revenue Trend</div>\n${buildTable(['Week', 'Transactions', 'Total'], monthly.weekly.map(w => [w.week, String(w.count), fmtCurrency(w.total)]), ['Total', String(monthly.weekly.reduce((s, w) => s + w.count, 0)), fmtCurrency(monthly.totalRevenue)])}` : ''}
+<div class="section-title">Revenue by Plan Type</div>
+${buildTable(['Plan Type', 'Count', 'Total'], monthly.byPlanType.map(i => [i.plan_type === 'no_plan' ? 'No Plan' : i.plan_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(monthly.byPlanType.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.totalRevenue)])}
+<div class="section-title">Revenue by Payment Method</div>
+${buildTable(['Method', 'Count', 'Total'], monthly.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(monthly.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.byMethod.reduce((s, i) => s + i.total, 0))])}
+${monthly.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances (as of Month-End)</div>\n${buildTable(['Member', 'Member ID', 'Balance'], monthly.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]), ['Total Outstanding', '', fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))])}` : ''}
+<div class="section-title">Summary</div>
+<table class="summary-table">
+<tr><td><strong>Payment Methods</strong></td><td>${monthly.byMethod.map(m => `${m.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${fmtCurrency(m.total)}`).join('; ')}</td></tr>
+<tr><td><strong>Total Outstanding</strong></td><td class="danger">${fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))}</td></tr>
+</table>
+<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+</body></html>`
+                    } else {
+                      setEmailSending(false)
+                      return
+                    }
+
+                    const result = await window.electronAPI.sendReportEmail({
+                      html,
+                      recipient: emailRecipient.trim(),
+                      appName,
+                      filename: emailFilename,
+                    })
+                    setEmailResult(result)
+                  } catch (error: any) {
+                    setEmailResult({ success: false, message: error.message })
+                  } finally {
+                    setEmailSending(false)
+                  }
+                }}
+                disabled={!emailRecipient.trim() || emailSending}
+              >
+                {emailSending ? 'Sending...' : 'Send Report'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

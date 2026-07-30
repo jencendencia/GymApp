@@ -364,3 +364,72 @@
 .fee-payment-history .coach-table td:last-child {
   min-width: 150px;
 }
+
+/* Enroll icon */
+.enroll-icon {
+  color: var(--accent, #c6ff3d);
+  font-size: 16px;
+  transition: transform 0.15s;
+}
+
+.enroll-icon:hover {
+  transform: scale(1.2);
+}
+
+/* Enroll modal payment section */
+.enroll-payment-section {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.enroll-payment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.enroll-payment-form {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.enroll-payment-muted {
+  color: var(--text-faint);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* Coach fee display in enroll modal */
+.enroll-coach-fee-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.enroll-coach-fee-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.enroll-coach-fee-amount {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.enroll-coach-fee-none {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}

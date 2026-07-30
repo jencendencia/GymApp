@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './Members.css'
-import { Member, Plan, Coach } from '../types/electron'
+import { Member, Plan, Coach, StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
 
 interface FingerprintState {
@@ -10,7 +10,8 @@ interface FingerprintState {
   error: string | null
 }
 
-function Members() {
+function Members({ currentUser }: { currentUser?: StaffUser | null }) {
+  const isAdmin = currentUser?.role === 'admin'
   const [members, setMembers] = useState<Member[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
   const [coaches, setCoaches] = useState<Coach[]>([])
@@ -25,7 +26,13 @@ function Members() {
     credentialId: null,
     error: null
   })
+  const [waiverAgreed, setWaiverAgreed] = useState(false)
+  const [waiverAgreedAt, setWaiverAgreedAt] = useState<string | null>(null)
+  const [showWaiverModal, setShowWaiverModal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [memberIdWarning, setMemberIdWarning] = useState<string | null>(null)
+  const [checkingMemberId, setCheckingMemberId] = useState(false)
+  const memberIdCheckTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   
   const [newPlanMember, setNewPlanMember] = useState<Member | null>(null)
   const [showNewPlanModal, setShowNewPlanModal] = useState(false)
@@ -49,6 +56,11 @@ function Members() {
     amount: 0,
     payment_method: 'cash',
   })
+
+  // Renewal waiver state
+  const [renewWaiverAgreed, setRenewWaiverAgreed] = useState(false)
+  const [renewWaiverAgreedAt, setRenewWaiverAgreedAt] = useState<string | null>(null)
+  const [renewShowWaiverModal, setRenewShowWaiverModal] = useState(false)
 
   const [formData, setFormData] = useState({
     member_id: '',
@@ -143,6 +155,38 @@ function Members() {
       }
     }
     input.click()
+  }
+
+  // Check if member ID already exists (with debounce)
+  const handleMemberIdChange = (value: string) => {
+    setFormData({ ...formData, member_id: value })
+    setMemberIdWarning(null)
+
+    // Clear any pending check
+    if (memberIdCheckTimeout.current) {
+      clearTimeout(memberIdCheckTimeout.current)
+    }
+
+    if (!value.trim()) {
+      setMemberIdWarning(null)
+      return
+    }
+
+    setCheckingMemberId(true)
+    memberIdCheckTimeout.current = setTimeout(async () => {
+      try {
+        const existing = await window.electronAPI.checkMemberIdExists(value.trim())
+        if (existing) {
+          setMemberIdWarning(`⚠️ Member ID "${value}" is already assigned to ${existing.name}`)
+        } else {
+          setMemberIdWarning(null)
+        }
+      } catch {
+        // Silently fail - don't block user
+      } finally {
+        setCheckingMemberId(false)
+      }
+    }, 500)
   }
 
   // Real WebAuthn fingerprint registration using Windows Hello
@@ -243,6 +287,7 @@ function Members() {
         coaching_start: formData.coaching_start || undefined,
         coaching_end: formData.coaching_end || undefined,
         balance: formData.balance || 0,
+        waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
       })
       
       // Get the numeric ID of the newly created member
@@ -422,6 +467,8 @@ function Members() {
     })
     setPhotoPreview(null)
     setFingerprint({ scanning: false, captured: false, credentialId: null, error: null })
+    setWaiverAgreed(false)
+    setWaiverAgreedAt(null)
   }
 
   const generateMemberId = () => {
@@ -447,6 +494,10 @@ function Members() {
     })
     setNewPlanShowPayment(false)
     setNewPlanPayment({ amount: 0, payment_method: 'cash' })
+    // Initialize waiver state based on existing member waiver
+    setRenewWaiverAgreed(!!member.waiver_agreed_at)
+    setRenewWaiverAgreedAt(member.waiver_agreed_at || null)
+    setRenewShowWaiverModal(false)
     setShowNewPlanModal(true)
   }
 
@@ -481,6 +532,9 @@ function Members() {
         coaching_end: newPlanMember.coaching_end || undefined,
         balance: newBalance,
         status: newPlanMember.status,
+        waiver_agreed_at: (!newPlanMember.waiver_agreed_at && renewWaiverAgreed && renewWaiverAgreedAt)
+          ? renewWaiverAgreedAt
+          : undefined,
       })
 
       // Process payment if entered
@@ -540,6 +594,8 @@ function Members() {
       photo: member.photo || ''
     })
     setPhotoPreview(member.photo || null)
+    setWaiverAgreed(!!member.waiver_agreed_at)
+    setWaiverAgreedAt(member.waiver_agreed_at || null)
     setShowForm(true)
   }
 
@@ -624,16 +680,18 @@ function Members() {
               <th>Member Since</th>
               <th>Name</th>
               <th>Plan</th>
-              <th>Status</th>              <th>Balance</th>
+              <th>Status</th>
+              <th>Balance</th>
               <th>Expiry</th>
               <th>Days Left</th>
+              <th>Waiver</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {members.length === 0 ? (
               <tr>
-                <td colSpan={10} className="empty-row">No members found</td>
+                <td colSpan={11} className="empty-row">No members found</td>
               </tr>
             ) : (
               members.map((member) => (
@@ -670,6 +728,13 @@ function Members() {
                     })()}
                   </td>
                   <td>
+                    {member.waiver_agreed_at ? (
+                      <span className="waiver-badge signed" title={`Signed ${new Date(member.waiver_agreed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>✓ Signed</span>
+                    ) : (
+                      <span className="waiver-badge unsigned">—</span>
+                    )}
+                  </td>
+                  <td>
                     <div className="table-actions">
                       <button
                         className="btn-icon"
@@ -681,16 +746,18 @@ function Members() {
                       >
                         📋
                       </button>
-                      <button
-                        className="btn-icon danger"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDelete(member.id)
-                        }}
-                        title="Delete"
-                      >
-                        ✕
-                      </button>
+                      {isAdmin && (
+                        <button
+                          className="btn-icon danger"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDelete(member.id)
+                          }}
+                          title="Delete"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -713,13 +780,15 @@ function Members() {
                 <th>Plan</th>
                 <th>Expiry Date</th>
                 <th>Days Left</th>
-                <th>Status</th>                      <th>Actions</th>
+                <th>Status</th>
+                <th>Waiver</th>
+                <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {expiringMembers.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-row">No expiring members</td>
+                <td colSpan={10} className="empty-row">No expiring members</td>
               </tr>
             ) : (
               expiringMembers.map((member) => {
@@ -760,6 +829,13 @@ function Members() {
                         </span>
                       </td>
                       <td>
+                        {member.waiver_agreed_at ? (
+                          <span className="waiver-badge signed" title={`Signed ${new Date(member.waiver_agreed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>✓ Signed</span>
+                        ) : (
+                          <span className="waiver-badge unsigned">—</span>
+                        )}
+                      </td>
+                      <td>
                         <div className="table-actions">
                           <button
                             className="btn-icon"
@@ -771,16 +847,18 @@ function Members() {
                           >
                             📋
                           </button>
-                          <button
-                            className="btn-icon danger"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleDelete(member.id)
-                            }}
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
+                          {isAdmin && (
+                            <button
+                              className="btn-icon danger"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDelete(member.id)
+                              }}
+                              title="Delete"
+                            >
+                              ✕
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -834,6 +912,46 @@ function Members() {
                     value={newPlanData.plan_end}
                     onChange={(e) => setNewPlanData({ ...newPlanData, plan_end: e.target.value })}
                   />
+                </div>
+              </div>
+
+              {/* ── Waiver Section (Renewal) ── */}
+              <div className="newplan-waiver-section">
+                <span className="section-label" style={{ margin: 0 }}>📄 Waiver Agreement</span>
+                <div className="renew-waiver-box">
+                  {renewWaiverAgreed || newPlanMember?.waiver_agreed_at ? (
+                    <div className="renew-waiver-signed">
+                      <div className="waiver-success-icon" style={{ width: 36, height: 36, fontSize: 18 }}>✓</div>
+                      <span className="renew-waiver-status success">Waiver on File</span>
+                      <span className="renew-waiver-hint">
+                        {renewWaiverAgreedAt
+                          ? `Signed ${new Date(renewWaiverAgreedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                          : 'Waiver already on record'}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setRenewShowWaiverModal(true)}
+                      >
+                        View Waiver
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="renew-waiver-pending">
+                      <div className="waiver-icon-large" style={{ fontSize: 24 }}>📄</div>
+                      <span className="renew-waiver-status">No waiver on file</span>
+                      <span className="renew-waiver-hint">
+                        Member must sign waiver before renewal
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setRenewShowWaiverModal(true)}
+                      >
+                        View & Sign Waiver
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -902,6 +1020,7 @@ function Members() {
               <button
                 className="btn btn-primary"
                 onClick={handleNewPlanSave}
+                disabled={!newPlanData.plan_id || (!newPlanMember.waiver_agreed_at && !renewWaiverAgreed)}
               >
                 Assign Plan
               </button>
@@ -953,7 +1072,52 @@ function Members() {
                     </div>
                   </div>
 
-                  {/* Fingerprint Registration - Real WebAuthn */}
+                  {/* Waiver Agreement */}
+                {/* Waiver Agreement */}
+                  <div className="enrollment-card">
+                    <label className="section-label">📄 Waiver Agreement</label>
+                    <div className="waiver-container">
+                      {waiverAgreed || (selectedMember?.waiver_agreed_at) ? (
+                        <div className="waiver-signed">
+                          <div className="waiver-success-icon">✓</div>
+                          <span className="waiver-status success">Waiver Signed</span>
+                          <span className="waiver-hint">
+                            {selectedMember?.waiver_agreed_at || waiverAgreedAt
+                              ? `Agreed on ${new Date((selectedMember?.waiver_agreed_at || waiverAgreedAt)!).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                              : 'Member agreed to the terms'}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setShowWaiverModal(true)}
+                          >
+                            {selectedMember ? 'View Waiver' : 'View Waiver'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="waiver-pending">
+                          <div className="waiver-icon-large">📄</div>
+                          <span className="waiver-status">
+                            {selectedMember ? 'No waiver on file' : 'Member must agree to waiver'}
+                          </span>
+                          <span className="waiver-hint">
+                            {selectedMember ? 'Waiver was not signed during enrollment' : 'Review liability waiver with the member'}
+                          </span>
+                          {!selectedMember && (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={() => setShowWaiverModal(true)}
+                            >
+                              View & Sign Waiver
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                {/* Fingerprint Registration - Real WebAuthn */}
                   <div className="enrollment-card">
                     <label className="section-label">Fingerprint Registration</label>
                     <div className="fingerprint-container">
@@ -1004,16 +1168,21 @@ function Members() {
 
                 {/* Basic Info Form */}
                 <div className="enrollment-form">
-                  <div className="form-grid">                      <div className="form-group">
+                  <div className="form-grid">
+                    <div className="form-group">
                       <label>Member ID</label>
                       <input
                         type="text"
-                        className="input"
+                        className={`input ${memberIdWarning ? 'input-warning' : ''}`}
                         value={formData.member_id}
-                        onChange={(e) => setFormData({ ...formData, member_id: e.target.value })}
+                        onChange={(e) => handleMemberIdChange(e.target.value)}
                         placeholder="Auto-generated if empty"
                         disabled={!!selectedMember}
                       />
+                      {checkingMemberId && <span className="member-id-checking">Checking...</span>}
+                      {memberIdWarning && (
+                        <span className="member-id-warning">{memberIdWarning}</span>
+                      )}
                     </div>
                     {selectedMember && (
                       <div className="form-group">
@@ -1296,9 +1465,131 @@ function Members() {
               <button
                 className="btn btn-primary"
                 onClick={selectedMember ? handleUpdate : handleCreate}
-                disabled={!formData.name}
+                disabled={!formData.name || (!selectedMember && !waiverAgreed)}
               >
                 {selectedMember ? 'Save Changes' : 'Create Member'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Renewal Waiver Modal */}
+      {renewShowWaiverModal && (
+        <div className="modal-overlay" onClick={() => setRenewShowWaiverModal(false)}>
+          <div className="modal waiver-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">📄 Membership Waiver & Release</h2>
+              <button className="btn-icon" onClick={() => setRenewShowWaiverModal(false)}>✕</button>
+            </div>
+            <div className="modal-body waiver-modal-body">
+              <div className="waiver-content">
+                <h3>ASSUMPTION OF RISK AND RELEASE OF LIABILITY</h3>
+                
+                <p>I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.</p>
+
+                <h4>1. ASSUMPTION OF RISK</h4>
+                <p>I acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.</p>
+
+                <h4>2. MEDICAL CLEARANCE</h4>
+                <p>I represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.</p>
+
+                <h4>3. RELEASE OF LIABILITY</h4>
+                <p>I hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.</p>
+
+                <h4>4. USE OF FACILITIES</h4>
+                <p>I agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.</p>
+
+                <h4>5. PHOTOGRAPHY AND MARKETING</h4>
+                <p>I grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.</p>
+
+                <hr />
+
+                <p className="waiver-agreement-text">
+                  By clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.
+                </p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setRenewShowWaiverModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setRenewWaiverAgreed(true)
+                  setRenewShowWaiverModal(false)
+                  const now = new Date().toISOString()
+                  setRenewWaiverAgreedAt(now)
+                  log.action({
+                    action: 'waiver_signed',
+                    entity_type: 'member',
+                    details: JSON.stringify({ member_name: newPlanMember?.name || 'Member', agreed_at: now, context: 'renewal' }),
+                  })
+                }}
+              >
+                I Agree
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Member Waiver Modal */}
+      {showWaiverModal && (
+        <div className="modal-overlay" onClick={() => setShowWaiverModal(false)}>
+          <div className="modal waiver-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">📄 Membership Waiver & Release</h2>
+              <button className="btn-icon" onClick={() => setShowWaiverModal(false)}>✕</button>
+            </div>
+            <div className="modal-body waiver-modal-body">
+              <div className="waiver-content">
+                <h3>ASSUMPTION OF RISK AND RELEASE OF LIABILITY</h3>
+                
+                <p>I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.</p>
+
+                <h4>1. ASSUMPTION OF RISK</h4>
+                <p>I acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.</p>
+
+                <h4>2. MEDICAL CLEARANCE</h4>
+                <p>I represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.</p>
+
+                <h4>3. RELEASE OF LIABILITY</h4>
+                <p>I hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.</p>
+
+                <h4>4. USE OF FACILITIES</h4>
+                <p>I agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.</p>
+
+                <h4>5. PHOTOGRAPHY AND MARKETING</h4>
+                <p>I grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.</p>
+
+                <hr />
+
+                <p className="waiver-agreement-text">
+                  By clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.
+                </p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowWaiverModal(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setWaiverAgreed(true)
+                  setShowWaiverModal(false)
+                  const now = new Date().toISOString()
+                  setWaiverAgreedAt(now)
+                  log.action({
+                    action: 'waiver_signed',
+                    entity_type: 'member',
+                    details: JSON.stringify({ member_name: formData.name || 'New Member', agreed_at: now }),
+                  })
+                }}
+              >
+                I Agree
               </button>
             </div>
           </div>
