@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import './Plans.css'
 import { Plan } from '../types/electron'
+import { log } from '../lib/logger'
 
 function Plans() {
   const [plans, setPlans] = useState<Plan[]>([])
@@ -29,10 +30,11 @@ function Plans() {
 
   const handleCreate = async () => {
     try {
-      await window.electronAPI.createPlan(formData)
+      const result = await window.electronAPI.createPlan(formData)
       setShowForm(false)
       resetForm()
       loadPlans()
+      log.createPlan(result.lastInsertRowid as number, formData.name, formData.price)
     } catch (error) {
       console.error('Failed to create plan:', error)
     }
@@ -46,6 +48,15 @@ function Plans() {
       setSelectedPlan(null)
       resetForm()
       loadPlans()
+      
+      // Build changes object
+      const changedFields: Record<string, any> = {}
+      if (selectedPlan.name !== formData.name) changedFields.name = formData.name
+      if (selectedPlan.price !== formData.price) changedFields.price = formData.price
+      if (selectedPlan.type !== formData.type) changedFields.type = formData.type
+      if (Object.keys(changedFields).length > 0) {
+        log.updatePlan(selectedPlan.id, formData.name, changedFields)
+      }
     } catch (error) {
       console.error('Failed to update plan:', error)
     }
@@ -54,8 +65,12 @@ function Plans() {
   const handleDelete = async (id: number) => {
     if (confirm('Are you sure you want to delete this plan?')) {
       try {
+        const plan = plans.find(p => p.id === id)
         await window.electronAPI.deletePlan(id)
         loadPlans()
+        if (plan) {
+          log.deletePlan(id, plan.name)
+        }
       } catch (error) {
         console.error('Failed to delete plan:', error)
       }

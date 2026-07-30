@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import './Coach.css'
 import { Coach as CoachType, Member, CoachFeePayment } from '../types/electron'
+import { log } from '../lib/logger'
 
 function Coach() {
   const [activeTab, setActiveTab] = useState<'registration' | 'members' | 'payments'>('registration')
@@ -108,8 +109,10 @@ function Coach() {
       }
       if (selectedCoach) {
         await window.electronAPI.updateCoach(selectedCoach.id, payload)
+        log.updateCoach(selectedCoach.id, coachForm.name, payload)
       } else {
-        await window.electronAPI.createCoach(payload)
+        const result = await window.electronAPI.createCoach(payload)
+        log.createCoach(result.lastInsertRowid as number, coachForm.name)
       }
       setShowCoachForm(false)
       resetCoachForm()
@@ -122,12 +125,16 @@ function Coach() {
   const handleDeleteCoach = async (id: number) => {
     if (confirm('Are you sure you want to delete this coach? Members assigned to this coach will be unassigned.')) {
       try {
+        const coach = coaches.find(c => c.id === id)
         await window.electronAPI.deleteCoach(id)
         if (selectedCoachForMembers === id) {
           setSelectedCoachForMembers(null)
           setCoachMembers([])
         }
         loadCoaches()
+        if (coach) {
+          log.deleteCoach(id, coach.name)
+        }
       } catch (error) {
         console.error('Failed to delete coach:', error)
       }
@@ -213,6 +220,10 @@ function Coach() {
       // Sync the registration table's collected column too
       setCollectedMap(prev => ({ ...prev, [feeCoachId]: collected }))
       setFeeForm({ member_id: 0, amount: '', notes: '' })
+      
+      // Log the fee payment
+      const member = feeCoachMembers.find(m => m.id === feeForm.member_id)
+      log.recordFeePayment(feeCoachId, feeCoachName, member?.name || `Member #${feeForm.member_id}`, Number(feeForm.amount))
     } catch (error) {
       console.error('Failed to record payment:', error)
     }
@@ -468,7 +479,7 @@ function Coach() {
                       ) : (
                         dailyPayments.map((p) => (
                           <tr key={p.id}>
-                            <td className="mono-text">{new Date(p.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
+                            <td className="mono-text">{new Date(p.created_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
                             <td>{p.member_name}<span className="text-faint"> ({p.member_code})</span></td>
                             <td className="mono-text fee-amount">₱{Number(p.amount).toFixed(2)}</td>
                             <td className="text-faint">{p.notes || '—'}</td>
@@ -501,7 +512,7 @@ function Coach() {
                       ) : (
                         monthlyPayments.map((p) => (
                           <tr key={p.id}>
-                            <td className="mono-text">{new Date(p.created_at).toLocaleDateString()}</td>
+                            <td className="mono-text">{new Date(p.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</td>
                             <td>{p.member_name}<span className="text-faint"> ({p.member_code})</span></td>
                             <td className="mono-text fee-amount">₱{Number(p.amount).toFixed(2)}</td>
                             <td className="text-faint">{p.notes || '—'}</td>
@@ -696,7 +707,7 @@ function Coach() {
                         feePayments.map((payment) => (
                           <tr key={payment.id}>
                             <td className="mono-text">
-                              {new Date(payment.created_at).toLocaleDateString()}
+                              {new Date(payment.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}
                             </td>
                             <td>
                               {payment.member_name}

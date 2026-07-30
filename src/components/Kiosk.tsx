@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './Kiosk.css'
 import { Member, TodayStats } from '../types/electron'
+import { log } from '../lib/logger'
 
 interface KioskProps {
   onRefresh: () => void
@@ -163,6 +164,7 @@ function Kiosk({ onRefresh }: KioskProps) {
               match_confidence: 1.0,
               status: 'success'
             })
+            log.checkinFingerprint(member.id, member.name)
             onRefresh()
           }
         } else {
@@ -207,6 +209,7 @@ function Kiosk({ onRefresh }: KioskProps) {
             match_confidence: 1.0,
             status: 'success'
           })
+          log.checkinManual(member.id, member.name)
           onRefresh()
         }
       } else {
@@ -237,6 +240,7 @@ function Kiosk({ onRefresh }: KioskProps) {
         match_confidence: 1.0,
         status: 'override'
       })
+      log.checkinOverride(matchedMember.id, matchedMember.name)
       handleConfirmCheckin()
       onRefresh()
     }

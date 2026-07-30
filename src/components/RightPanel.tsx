@@ -27,7 +27,8 @@ function RightPanel({ stats, recentCheckins, expiringSoon, currentTime }: RightP
   }
 
   const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp)
+    // SQLite timestamps are UTC; ensure correct parsing
+    const date = new Date(timestamp.replace(' ', 'T') + 'Z')
     return date.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',

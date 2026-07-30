@@ -27,14 +27,15 @@ function Checkins() {
   )
 
   const formatTime = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
+    // SQLite timestamps are UTC; ensure correct parsing
+    return new Date(timestamp.replace(' ', 'T') + 'Z').toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
     })
   }
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString('en-US', {
+    return new Date(timestamp.replace(' ', 'T') + 'Z').toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',

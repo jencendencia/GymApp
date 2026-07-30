@@ -54,6 +54,14 @@ export interface ElectronAPI {
   getCoachMonthlyTotal: (coachId: number, date: string) => Promise<number>
   getCoachMonthlyPayments: (coachId: number, date: string) => Promise<CoachFeePayment[]>
 
+  // Reports
+  getDailyReport: (date: string) => Promise<DailyReport>
+  getMonthlyReport: (yearMonth: string) => Promise<MonthlyReport>
+
+  // Activity Logs
+  createActivityLog: (log: CreateActivityLogInput) => Promise<any>
+  getActivityLogs: (limit?: number) => Promise<ActivityLog[]>
+
   // Backup & Restore
   createBackup: () => Promise<{ success: boolean; path?: string; reason?: string }>
   restoreBackup: () => Promise<{ success: boolean; reason?: string }>
@@ -63,6 +71,11 @@ export interface ElectronAPI {
   getSetting: (key: string) => Promise<string | null>
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
+
+  // Auto-update
+  checkForUpdates: () => Promise<{ status: string; message?: string }>
+  restartApp: () => Promise<void>
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
 }
 
 export interface Coach {
@@ -200,8 +213,12 @@ export interface Payment {
   amount: number
   type: 'new_plan' | 'renewal' | 'top_up'
   plan_id?: number
+  payment_method?: string
+  staff_id?: number
   created_at: string
   name?: string
+  member_name?: string
+  member_code?: string
   plan_name?: string
 }
 
@@ -210,6 +227,43 @@ export interface CreatePaymentInput {
   amount: number
   type: 'new_plan' | 'renewal' | 'top_up'
   plan_id?: number
+  payment_method?: string
+  staff_id?: number
+}
+
+export interface DailyReport {
+  date: string
+  totalRevenue: number
+  byType: { type: string; count: number; total: number }[]
+  byMethod: { payment_method: string; count: number; total: number }[]
+  transactions: Payment[]
+  newMembers: number
+  renewals: number
+  outstandingCount: number
+  outstanding: { id: number; member_id: string; name: string; balance: number }[]
+}
+
+export interface MonthlyReportWeek {
+  week: string
+  total: number
+  count: number
+}
+
+export interface MonthlyReport {
+  yearMonth: string
+  totalRevenue: number
+  previousMonthRevenue: number
+  percentChange: number
+  weekly: MonthlyReportWeek[]
+  byPlanType: { plan_type: string; count: number; total: number }[]
+  byMethod: { payment_method: string; count: number; total: number }[]
+  newMembers: number
+  renewals: number
+  churned: number
+  outstanding: { id: number; member_id: string; name: string; balance: number }[]
+  outstandingCount: number
+  activeMemberCount: number
+  avgRevenuePerMember: number
 }
 
 export interface CoachFeePayment {
@@ -229,6 +283,36 @@ export interface CreateCoachFeePaymentInput {
   member_id: number
   amount: number
   notes?: string
+}
+
+export interface ActivityLog {
+  id: number
+  action: string
+  entity_type: string
+  entity_id?: number
+  details?: string
+  user: string
+  created_at: string
+}
+
+export interface CreateActivityLogInput {
+  action: string
+  entity_type: string
+  entity_id?: number
+  details?: string
+  user?: string
+}
+
+export interface UpdateStatus {
+  status: 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error'
+  message: string
+  version?: string
+  percent?: number
+  bytesPerSecond?: number
+  transferred?: number
+  total?: number
+  error?: string
+  info?: any
 }
 
 export interface TodayStats {

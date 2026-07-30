@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './Members.css'
 import { Member, Plan, Coach } from '../types/electron'
+import { log } from '../lib/logger'
 
 interface FingerprintState {
   scanning: boolean
@@ -32,6 +33,21 @@ function Members() {
     plan_id: 0,
     plan_start: '',
     plan_end: '',
+  })
+
+  // Payment recording state (create mode only)
+  const [showPaymentForm, setShowPaymentForm] = useState(false)
+  const [paymentForm, setPaymentForm] = useState({
+    amount: 0,
+    type: 'new_plan' as 'new_plan' | 'renewal' | 'top_up',
+    payment_method: 'cash',
+  })
+
+  // New Plan modal payment state
+  const [newPlanShowPayment, setNewPlanShowPayment] = useState(false)
+  const [newPlanPayment, setNewPlanPayment] = useState({
+    amount: 0,
+    payment_method: 'cash',
   })
 
   const [formData, setFormData] = useState({
@@ -209,7 +225,7 @@ function Members() {
   const handleCreate = async () => {
     try {
       const memberId = formData.member_id || generateMemberId()
-      await window.electronAPI.createMember({
+      const result = await window.electronAPI.createMember({
         member_id: memberId,
         name: formData.name,
         email: formData.email || undefined,
@@ -229,15 +245,67 @@ function Members() {
         balance: formData.balance || 0,
       })
       
+      // Get the numeric ID of the newly created member
+      const newNumericId = result?.lastInsertRowid ? Number(result.lastInsertRowid) : 0
+      
       // Save the fingerprint credential if captured
       if (fingerprint.captured && fingerprint.credentialId) {
         // Store the WebAuthn credential ID associated with this member
         await window.electronAPI.saveFingerprintCredential(memberId, fingerprint.credentialId)
+        if (newNumericId) log.registerFingerprint(newNumericId, formData.name)
+      }
+
+      // Process pending payment from the payment form (if any)
+      if (newNumericId && showPaymentForm && paymentForm.amount > 0) {
+        const payAmount = paymentForm.amount
+        await window.electronAPI.createPayment({
+          member_id: newNumericId,
+          amount: payAmount,
+          type: paymentForm.type,
+          plan_id: formData.plan_id || undefined,
+          payment_method: paymentForm.payment_method,
+        })
+        // Reduce balance by payment amount
+        const updatedBalance = Math.max(0, (formData.balance || 0) - payAmount)
+        await window.electronAPI.updateMember(newNumericId, {
+          name: formData.name,
+          email: formData.email || undefined,
+          phone: formData.phone || undefined,
+          photo: formData.photo || undefined,
+          emergency_contact: formData.emergency_contact || undefined,
+          emergency_phone: formData.emergency_phone || undefined,
+          plan_id: formData.plan_id || undefined,
+          plan_start: formData.plan_start || undefined,
+          plan_end: formData.plan_end || undefined,
+          height: formData.height ? Number(formData.height) : undefined,
+          weight: formData.weight ? Number(formData.weight) : undefined,
+          birthday: formData.birthday || undefined,
+          coach_id: formData.coach_id || undefined,
+          coaching_start: formData.coaching_start || undefined,
+          coaching_end: formData.coaching_end || undefined,
+          balance: updatedBalance,
+          status: 'active',
+        })
+        log.action({
+          action: 'record_payment',
+          entity_type: 'payment',
+          entity_id: newNumericId,
+          details: JSON.stringify({
+            member_name: formData.name,
+            amount: payAmount,
+            type: paymentForm.type,
+            method: paymentForm.payment_method,
+          }),
+        })
       }
       
       setShowForm(false)
       resetForm()
       loadMembers()
+      
+      if (newNumericId) {
+        log.createMember(newNumericId, formData.name)
+      }
     } catch (error) {
       console.error('Failed to create member:', error)
     }
@@ -269,12 +337,35 @@ function Members() {
       // Update fingerprint credential if newly captured
       if (fingerprint.captured && fingerprint.credentialId) {
         await window.electronAPI.saveFingerprintCredential(selectedMember.member_id, fingerprint.credentialId)
+        log.registerFingerprint(selectedMember.id, formData.name)
       }
       
       setShowForm(false)
       setSelectedMember(null)
       resetForm()
       loadMembers()
+      
+      // Build changes object for logging — track all editable fields
+      const changedFields: Record<string, any> = {}
+      if (selectedMember.name !== formData.name) changedFields.name = formData.name
+      if (selectedMember.email !== formData.email) changedFields.email = formData.email
+      if (selectedMember.phone !== formData.phone) changedFields.phone = formData.phone
+      if (selectedMember.emergency_contact !== formData.emergency_contact) changedFields.emergency_contact = formData.emergency_contact
+      if (selectedMember.emergency_phone !== formData.emergency_phone) changedFields.emergency_phone = formData.emergency_phone
+      if (selectedMember.plan_id !== formData.plan_id) changedFields.plan_id = formData.plan_id
+      if (selectedMember.plan_start !== formData.plan_start) changedFields.plan_start = formData.plan_start
+      if (selectedMember.plan_end !== formData.plan_end) changedFields.plan_end = formData.plan_end
+      if (Number(selectedMember.height ?? 0) !== Number(formData.height || 0)) changedFields.height = formData.height
+      if (Number(selectedMember.weight ?? 0) !== Number(formData.weight || 0)) changedFields.weight = formData.weight
+      if (selectedMember.birthday !== formData.birthday) changedFields.birthday = formData.birthday
+      if (selectedMember.coach_id !== formData.coach_id) changedFields.coach_id = formData.coach_id
+      if (selectedMember.coaching_start !== formData.coaching_start) changedFields.coaching_start = formData.coaching_start
+      if (selectedMember.coaching_end !== formData.coaching_end) changedFields.coaching_end = formData.coaching_end
+      if (selectedMember.balance !== formData.balance) changedFields.balance = formData.balance
+      if (selectedMember.status !== formData.status) changedFields.status = formData.status
+      if (Object.keys(changedFields).length > 0) {
+        log.updateMember(selectedMember.id, formData.name, changedFields)
+      }
     } catch (error) {
       console.error('Failed to update member:', error)
     }
@@ -283,9 +374,13 @@ function Members() {
   const handleDelete = async (id: number) => {
     if (confirm('Are you sure you want to delete this member?')) {
       try {
+        const member = members.find(m => m.id === id)
         await window.electronAPI.deleteMember(id)
         setSelectedMember(null)
         loadMembers()
+        if (member) {
+          log.deleteMember(id, member.name)
+        }
       } catch (error) {
         console.error('Failed to delete member:', error)
       }
@@ -350,6 +445,8 @@ function Members() {
       plan_start: today,
       plan_end: finalEnd,
     })
+    setNewPlanShowPayment(false)
+    setNewPlanPayment({ amount: 0, payment_method: 'cash' })
     setShowNewPlanModal(true)
   }
 
@@ -359,6 +456,13 @@ function Members() {
       return
     }
     try {
+      // Get the plan price for auto-updating balance
+      const selectedPlan = plans.find(p => p.id === newPlanData.plan_id)
+      const planPrice = selectedPlan?.price || 0
+      // New balance: outstanding balance + plan price - any payment made now
+      const paymentAmount = newPlanShowPayment && newPlanPayment.amount > 0 ? newPlanPayment.amount : 0
+      const newBalance = Math.max(0, (newPlanMember.balance || 0) + planPrice - paymentAmount)
+
       await window.electronAPI.updateMember(newPlanMember.id, {
         name: newPlanMember.name,
         email: newPlanMember.email || undefined,
@@ -375,12 +479,39 @@ function Members() {
         coach_id: newPlanMember.coach_id || undefined,
         coaching_start: newPlanMember.coaching_start || undefined,
         coaching_end: newPlanMember.coaching_end || undefined,
-        balance: newPlanMember.balance || 0,
+        balance: newBalance,
         status: newPlanMember.status,
       })
+
+      // Process payment if entered
+      if (paymentAmount > 0) {
+        await window.electronAPI.createPayment({
+          member_id: newPlanMember.id,
+          amount: paymentAmount,
+          type: 'renewal',
+          plan_id: newPlanData.plan_id,
+          payment_method: newPlanPayment.payment_method,
+        })
+        log.action({
+          action: 'record_payment',
+          entity_type: 'payment',
+          entity_id: newPlanMember.id,
+          details: JSON.stringify({
+            member_name: newPlanMember.name,
+            amount: paymentAmount,
+            type: 'renewal',
+            method: newPlanPayment.payment_method,
+          }),
+        })
+      }
+
       setShowNewPlanModal(false)
       setNewPlanMember(null)
       loadMembers()
+      
+      // Log the plan assignment
+      const plan = plans.find(p => p.id === newPlanData.plan_id)
+      log.assignPlan(newPlanMember.id, newPlanMember.name, plan?.name || `Plan #${newPlanData.plan_id}`)
     } catch (error) {
       console.error('Failed to update plan:', error)
     }
@@ -410,6 +541,11 @@ function Members() {
     })
     setPhotoPreview(member.photo || null)
     setShowForm(true)
+  }
+
+  const resetPaymentForm = () => {
+    setShowPaymentForm(false)
+    setPaymentForm({ amount: 0, type: 'new_plan', payment_method: 'cash' })
   }
 
   const getPlanName = (planId?: number) => {
@@ -454,6 +590,8 @@ function Members() {
             resetForm()
             setSelectedMember(null)
             setShowForm(true)
+            setShowPaymentForm(false)
+            setPaymentForm({ amount: 0, type: 'new_plan', payment_method: 'cash' })
           }}>
             + Add Member
           </button>
@@ -483,6 +621,7 @@ function Members() {
             <tr>
               <th>Photo</th>
               <th>Member ID</th>
+              <th>Member Since</th>
               <th>Name</th>
               <th>Plan</th>
               <th>Status</th>              <th>Balance</th>
@@ -494,7 +633,7 @@ function Members() {
           <tbody>
             {members.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-row">No members found</td>
+                <td colSpan={10} className="empty-row">No members found</td>
               </tr>
             ) : (
               members.map((member) => (
@@ -507,6 +646,7 @@ function Members() {
                     )}
                   </td>
                   <td className="mono-text">{member.member_id}</td>
+                  <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
                   <td>{member.name}</td>
                   <td>{getPlanName(member.plan_id)}</td>
                   <td>
@@ -568,6 +708,7 @@ function Members() {
               <tr>
                 <th>Photo</th>
                 <th>Member ID</th>
+                <th>Member Since</th>
                 <th>Name</th>
                 <th>Plan</th>
                 <th>Expiry Date</th>
@@ -598,6 +739,7 @@ function Members() {
                         )}
                       </td>
                       <td className="mono-text">{member.member_id}</td>
+                      <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
                       <td>{member.name}</td>
                       <td>{getPlanName(member.plan_id)}</td>
                       <td className="mono-text">
@@ -693,6 +835,64 @@ function Members() {
                     onChange={(e) => setNewPlanData({ ...newPlanData, plan_end: e.target.value })}
                   />
                 </div>
+              </div>
+
+              {/* Payment section for new plan */}
+              <div className="newplan-payment-section">
+                <div className="newplan-payment-header">
+                  <span className="section-label" style={{ margin: 0 }}>💰 Payment</span>
+                  <span className="newplan-balance mono-text">
+                    Current Balance: <strong className={newPlanMember.balance > 0 ? 'danger' : ''}>₱{(newPlanMember.balance || 0).toFixed(2)}</strong>
+                  </span>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setNewPlanShowPayment(true)}
+                    disabled={newPlanShowPayment}
+                  >
+                    + Add Payment
+                  </button>
+                </div>
+                {newPlanShowPayment && (
+                  <div className="payment-form newplan-payment-form">
+                    <div className="payment-form-grid">
+                      <div className="form-group">
+                        <label>Amount</label>
+                        <input
+                          type="number"
+                          className="input"
+                          value={newPlanPayment.amount || ''}
+                          onChange={(e) => setNewPlanPayment({ ...newPlanPayment, amount: Number(e.target.value) })}
+                          placeholder="0.00"
+                          step="0.01"
+                          min="1"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Payment Method</label>
+                        <select
+                          className="input"
+                          value={newPlanPayment.payment_method}
+                          onChange={(e) => setNewPlanPayment({ ...newPlanPayment, payment_method: e.target.value })}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="card">Card</option>
+                          <option value="gcash">GCash</option>
+                          <option value="bank_transfer">Bank Transfer</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>&nbsp;</label>
+                        <button className="btn btn-secondary btn-sm" onClick={() => { setNewPlanShowPayment(false); setNewPlanPayment({ amount: 0, payment_method: 'cash' }) }}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {!newPlanShowPayment && (
+                  <p className="newplan-payment-muted">Optionally record a payment when assigning this plan.</p>
+                )}
               </div>
             </div>
             <div className="modal-footer">
@@ -804,8 +1004,7 @@ function Members() {
 
                 {/* Basic Info Form */}
                 <div className="enrollment-form">
-                  <div className="form-grid">
-                    <div className="form-group">
+                  <div className="form-grid">                      <div className="form-group">
                       <label>Member ID</label>
                       <input
                         type="text"
@@ -816,6 +1015,18 @@ function Members() {
                         disabled={!!selectedMember}
                       />
                     </div>
+                    {selectedMember && (
+                      <div className="form-group">
+                        <label>Member Since</label>
+                        <input
+                          type="text"
+                          className="input"
+                          value={selectedMember.created_at ? new Date(selectedMember.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'}
+                          disabled
+                          readOnly
+                        />
+                      </div>
+                    )}
                     <div className="form-group">
                       <label>Name *</label>
                       <input
@@ -872,18 +1083,27 @@ function Members() {
                       <select
                         className="input"
                         value={formData.plan_id}
-                        onChange={(e) => setFormData({ ...formData, plan_id: Number(e.target.value) })}
-                      >
-                        <option value={0}>No plan</option>
-                        {plans.map((plan) => (
-                          <option key={plan.id} value={plan.id}>
-                            {plan.name} (₱{plan.price})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label>Balance</label>
+                      onChange={(e) => {
+                        const planId = Number(e.target.value)
+                        const plan = plans.find(p => p.id === planId)
+                        // Auto-set balance to plan price when creating a new member
+                        if (!selectedMember) {
+                          setFormData({ ...formData, plan_id: planId, balance: plan ? plan.price : 0 })
+                        } else {
+                          setFormData({ ...formData, plan_id: planId })
+                        }
+                      }}
+                    >
+                      <option value={0}>No plan</option>
+                      {plans.map((plan) => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.name} (₱{plan.price})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Balance</label>
                       <input
                         type="number"
                         className="input"
@@ -992,6 +1212,83 @@ function Members() {
                 </div>
               </div>
             </div>
+
+            {/* ── Payments Section (create mode only) ── */}
+            {!selectedMember && (
+              <div className="payment-section">
+                <div className="payment-section-header">
+                  <h3 className="section-label" style={{ margin: 0 }}>💰 Payments</h3>
+                  <div className="payment-section-actions">
+                    <span className="payment-hint">Payment will be recorded when you create the member</span>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => setShowPaymentForm(true)}
+                      disabled={showPaymentForm}
+                    >
+                      + Record Payment
+                    </button>
+                  </div>
+                </div>
+
+                {/* Record Payment Form */}
+                {showPaymentForm && (
+                  <div className="payment-form">
+                    <div className="payment-form-grid">
+                      <div className="form-group">
+                        <label>Amount *</label>
+                        <input
+                          type="number"
+                          className="input"
+                          value={paymentForm.amount || ''}
+                          onChange={(e) => setPaymentForm({ ...paymentForm, amount: Number(e.target.value) })}
+                          placeholder="0.00"
+                          step="0.01"
+                          min="1"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Payment Type</label>
+                        <select
+                          className="input"
+                          value={paymentForm.type}
+                          onChange={(e) => setPaymentForm({ ...paymentForm, type: e.target.value as any })}
+                        >
+                          <option value="new_plan">New Plan</option>
+                          <option value="renewal">Renewal</option>
+                          <option value="top_up">Top Up</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Payment Method</label>
+                        <select
+                          className="input"
+                          value={paymentForm.payment_method}
+                          onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value })}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="card">Card</option>
+                          <option value="gcash">GCash</option>
+                          <option value="bank_transfer">Bank Transfer</option>
+                        </select>
+                      </div>
+                      <div className="form-group payment-form-actions">
+                        <label>&nbsp;</label>
+                        <div className="payment-btn-row">
+                          <button className="btn btn-secondary btn-sm" onClick={resetPaymentForm}>
+                            Cancel
+                          </button>
+                          <span className="payment-create-note">
+                            Payment will be applied when you click "Create Member"
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowForm(false)}>
                 Cancel

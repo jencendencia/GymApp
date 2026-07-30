@@ -8,9 +8,11 @@ import Plans from './components/Plans'
 import Checkins from './components/Checkins'
 import Settings from './components/Settings'
 import Coach from './components/Coach'
+import ActivityLog from './components/ActivityLog'
+import Reports from './components/Reports'
 import { Member, TodayStats, Checkin } from './types/electron'
 
-type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'reports' | 'settings'
+type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings'
 
 function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
@@ -93,8 +95,10 @@ function App() {
         return <Plans />
       case 'checkins':
         return <Checkins />
+      case 'activitylog':
+        return <ActivityLog />
       case 'reports':
-        return <div className="placeholder-screen">Reports coming soon</div>
+        return <Reports />
       case 'settings':
         return <Settings onAppNameChange={handleAppNameChange} onAppLogoChange={handleAppLogoChange} />
       default:

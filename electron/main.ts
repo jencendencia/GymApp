@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import path from 'path'
 import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
+import { autoUpdater } from 'electron-updater'
 
 let mainWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
@@ -91,6 +92,8 @@ function initDatabase() {
       amount REAL NOT NULL,
       type TEXT NOT NULL CHECK(type IN ('new_plan', 'renewal', 'top_up')),
       plan_id INTEGER,
+      payment_method TEXT DEFAULT 'cash',
+      staff_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (member_id) REFERENCES members(id),
       FOREIGN KEY (plan_id) REFERENCES plans(id)
@@ -114,6 +117,16 @@ function initDatabase() {
       role TEXT DEFAULT 'staff' CHECK(role IN ('admin', 'staff')),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS activity_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      details TEXT,
+      user TEXT DEFAULT 'staff',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `)
 
   // Migrate existing databases: add columns if they don't exist
@@ -125,6 +138,8 @@ function initDatabase() {
     { table: 'members', column: 'coaching_start', def: 'DATE DEFAULT NULL' },
     { table: 'members', column: 'coaching_end', def: 'DATE DEFAULT NULL' },
     { table: 'coaches', column: 'professional_fee', def: 'REAL DEFAULT 0' },
+    { table: 'payments', column: 'payment_method', def: 'TEXT DEFAULT \'cash\'' },
+    { table: 'payments', column: 'staff_id', def: 'INTEGER DEFAULT NULL' },
   ]
   for (const col of columnsToAdd) {
     try {
@@ -153,6 +168,9 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
   })
+
+  // Auto-updater setup
+  setupAutoUpdater()
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
@@ -410,9 +428,16 @@ function setupIPC() {
 
   ipcMain.handle('create-payment', (_, payment) => {
     return db?.prepare(`
-      INSERT INTO payments (member_id, amount, type, plan_id)
-      VALUES (?, ?, ?, ?)
-    `).run(payment.member_id, payment.amount, payment.type, payment.plan_id)
+      INSERT INTO payments (member_id, amount, type, plan_id, payment_method, staff_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      payment.member_id,
+      payment.amount,
+      payment.type,
+      payment.plan_id,
+      payment.payment_method || 'cash',
+      payment.staff_id || null
+    )
   })
 
   // Coaches
@@ -709,6 +734,228 @@ function setupIPC() {
     }
   })
 
+  // ─── Reports ────────────────────────────────────────
+
+  ipcMain.handle('get-daily-report', (_, date: string) => {
+    try {
+      const today = date || new Date().toISOString().split('T')[0]
+
+      // Total revenue for the day
+      const totalRevenueRow = db?.prepare(`
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE DATE(created_at) = ?
+      `).get(today) as any
+
+      // Revenue by payment type
+      const byType = db?.prepare(`
+        SELECT type, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE DATE(created_at) = ?
+        GROUP BY type
+      `).all(today) || []
+
+      // Revenue by payment method
+      const byMethod = db?.prepare(`
+        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE DATE(created_at) = ?
+        GROUP BY payment_method
+      `).all(today) || []
+
+      // Itemized transaction list
+      const transactions = db?.prepare(`
+        SELECT p.*, m.name as member_name, m.member_id as member_code, pl.name as plan_name
+        FROM payments p
+        JOIN members m ON p.member_id = m.id
+        LEFT JOIN plans pl ON p.plan_id = pl.id
+        WHERE DATE(p.created_at) = ?
+        ORDER BY p.created_at DESC
+      `).all(today) || []
+
+      // New members enrolled today
+      const newMembersRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM members WHERE DATE(created_at) = ?
+      `).get(today) as any
+
+      // Renewals today
+      const renewalsRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM payments
+        WHERE type = 'renewal' AND DATE(created_at) = ?
+      `).get(today) as any
+
+      // Members with outstanding balance who checked in today
+      const outstanding = db?.prepare(`
+        SELECT DISTINCT m.id, m.member_id, m.name, m.balance
+        FROM members m
+        JOIN checkins c ON c.member_id = m.id
+        WHERE DATE(c.timestamp) = ? AND m.balance > 0
+        ORDER BY m.balance DESC
+      `).all(today) || []
+
+      return {
+        date: today,
+        totalRevenue: totalRevenueRow?.total || 0,
+        byType,
+        byMethod,
+        transactions,
+        newMembers: newMembersRow?.count || 0,
+        renewals: renewalsRow?.count || 0,
+        outstandingCount: outstanding.length,
+        outstanding,
+      }
+    } catch (error) {
+      console.error('get-daily-report error:', error)
+      throw error
+    }
+  })
+
+  ipcMain.handle('get-monthly-report', (_, yearMonth: string) => {
+    try {
+      // yearMonth format: 'YYYY-MM'
+      const ym = yearMonth || new Date().toISOString().slice(0, 7)
+
+      // Parse the month boundaries
+      const [y, m] = ym.split('-').map(Number)
+      const monthStart = `${ym}-01`
+      const nextMonth = m === 12 ? `${y + 1}-01` : `${ym.slice(0, 5)}${String(m + 1).padStart(2, '0')}-01`
+
+      // Previous month for comparison
+      const prevMonth = m === 1
+        ? `${y - 1}-${String(12).padStart(2, '0')}`
+        : `${ym.slice(0, 5)}${String(m - 1).padStart(2, '0')}`
+
+      // Total revenue this month
+      const revenueRow = db?.prepare(`
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE strftime('%Y-%m', created_at) = ?
+      `).get(ym) as any
+
+      // Total revenue last month
+      const prevRevenueRow = db?.prepare(`
+        SELECT COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE strftime('%Y-%m', created_at) = ?
+      `).get(prevMonth) as any
+
+      // Weekly revenue breakdown (weeks 1-4)
+      const weekly = db?.prepare(`
+        SELECT
+          CASE
+            WHEN CAST(strftime('%d', created_at) AS INTEGER) <= 7 THEN 'Week 1'
+            WHEN CAST(strftime('%d', created_at) AS INTEGER) <= 14 THEN 'Week 2'
+            WHEN CAST(strftime('%d', created_at) AS INTEGER) <= 21 THEN 'Week 3'
+            ELSE 'Week 4'
+          END as week,
+          COALESCE(SUM(amount), 0) as total,
+          COUNT(*) as count
+        FROM payments WHERE strftime('%Y-%m', created_at) = ?
+        GROUP BY week ORDER BY week
+      `).all(ym) || []
+
+      // Revenue by plan type (join via plan_id)
+      const byPlanType = db?.prepare(`
+        SELECT
+          CASE
+            WHEN pl.type IS NULL THEN 'no_plan'
+            ELSE pl.type
+          END as plan_type,
+          COUNT(*) as count,
+          COALESCE(SUM(p.amount), 0) as total
+        FROM payments p
+        LEFT JOIN plans pl ON p.plan_id = pl.id
+        WHERE strftime('%Y-%m', p.created_at) = ?
+        GROUP BY plan_type ORDER BY total DESC
+      `).all(ym) || []
+
+      // Revenue by payment method
+      const byMethod = db?.prepare(`
+        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM payments WHERE strftime('%Y-%m', created_at) = ?
+        GROUP BY payment_method
+      `).all(ym) || []
+
+      // New members this month
+      const newMembersRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM members
+        WHERE DATE(created_at) >= ? AND DATE(created_at) < ?
+      `).get(monthStart, nextMonth) as any
+
+      // Renewals this month
+      const renewalsRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM payments
+        WHERE type = 'renewal' AND strftime('%Y-%m', created_at) = ?
+      `).get(ym) as any
+
+      // Churned members (plan ended this month)
+      const churnedRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM members
+        WHERE DATE(plan_end) >= ? AND DATE(plan_end) < ? AND status = 'inactive'
+      `).get(monthStart, nextMonth) as any
+
+      // Members with outstanding balance as of month-end
+      const outstanding = db?.prepare(`
+        SELECT id, member_id, name, balance
+        FROM members WHERE balance > 0
+        ORDER BY balance DESC LIMIT 50
+      `).all() || []
+
+      // Average revenue per active member
+      const activeCountRow = db?.prepare(`
+        SELECT COUNT(*) as count FROM members WHERE status = 'active'
+      `).get() as any
+
+      const totalRevenue = revenueRow?.total || 0
+      const activeCount = activeCountRow?.count || 1
+
+      return {
+        yearMonth: ym,
+        totalRevenue,
+        previousMonthRevenue: prevRevenueRow?.total || 0,
+        percentChange: prevRevenueRow?.total
+          ? ((totalRevenue - (prevRevenueRow?.total || 0)) / (prevRevenueRow?.total || 1)) * 100
+          : 0,
+        weekly,
+        byPlanType,
+        byMethod,
+        newMembers: newMembersRow?.count || 0,
+        renewals: renewalsRow?.count || 0,
+        churned: churnedRow?.count || 0,
+        outstanding,
+        outstandingCount: outstanding.length,
+        activeMemberCount: activeCount,
+        avgRevenuePerMember: activeCount > 0 ? totalRevenue / activeCount : 0,
+      }
+    } catch (error) {
+      console.error('get-monthly-report error:', error)
+      throw error
+    }
+  })
+
+  // Activity Logs
+  ipcMain.handle('create-activity-log', (_, log) => {
+    return db?.prepare(`
+      INSERT INTO activity_logs (action, entity_type, entity_id, details, user)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(log.action, log.entity_type, log.entity_id || null, log.details || null, log.user || 'staff')
+  })
+
+  ipcMain.handle('get-activity-logs', (_, limit?: number) => {
+    return db?.prepare(`
+      SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT ?
+    `).all(limit || 100)
+  })
+
+  // Auto-updater
+  ipcMain.handle('check-for-updates', async () => {
+    try {
+      autoUpdater.checkForUpdates()
+      return { status: 'checking' }
+    } catch (error: any) {
+      return { status: 'error', message: error.message }
+    }
+  })
+
+  ipcMain.handle('restart-app', () => {
+    autoUpdater.quitAndInstall()
+  })
+
   // Window controls
   ipcMain.handle('minimize-window', () => mainWindow?.minimize())
   ipcMain.handle('maximize-window', () => {
@@ -719,6 +966,64 @@ function setupIPC() {
     }
   })
   ipcMain.handle('close-window', () => mainWindow?.close())
+}
+
+// ── Auto-Updater ──
+function setupAutoUpdater() {
+  // Configure autoUpdater
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = false
+
+  // Listen for events
+  autoUpdater.on('checking-for-update', () => {
+    mainWindow?.webContents.send('update-status', { status: 'checking', message: 'Checking for updates...' })
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'available',
+      message: `Version ${info.version} is available`,
+      version: info.version,
+      info,
+    })
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'up-to-date',
+      message: 'You\'re on the latest version!',
+      info,
+    })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    const pct = Math.round(progress.percent)
+    mainWindow?.webContents.send('update-status', {
+      status: 'downloading',
+      message: `Downloading update... ${pct}%`,
+      percent: pct,
+      bytesPerSecond: progress.bytesPerSecond,
+      transferred: progress.transferred,
+      total: progress.total,
+    })
+  })
+
+  autoUpdater.on('error', (error) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'error',
+      message: `Update error: ${error.message}`,
+      error: error.message,
+    })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update-status', {
+      status: 'downloaded',
+      message: 'Update ready to install. Restart to apply?',
+      version: info.version,
+      info,
+    })
+  })
 }
 
 app.whenReady().then(() => {

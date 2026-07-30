@@ -14,6 +14,7 @@ const navItems = [
   { id: 'coach', label: 'Coach', icon: '🏋️' },
   { id: 'plans', label: 'Plans', icon: '📋' },
   { id: 'checkins', label: 'Check-ins', icon: '📊' },
+  { id: 'activitylog', label: 'Activity Log', icon: '📜' },
   { id: 'reports', label: 'Reports', icon: '📈' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ]

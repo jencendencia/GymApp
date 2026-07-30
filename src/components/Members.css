@@ -463,3 +463,199 @@
   color: var(--text-muted);
 }
 
+/* ── Payment Section ── */
+.payment-section {
+  border-top: 1px solid var(--border);
+  padding: 20px 24px;
+}
+
+.payment-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.payment-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.payment-balance-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.payment-balance-label strong.danger {
+  color: var(--danger);
+}
+
+/* Payment Form */
+.payment-form {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.payment-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.payment-form-actions {
+  display: flex;
+  flex-direction: column;
+}
+
+.payment-btn-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Payment History Table */
+.payment-history {
+  margin-top: 8px;
+}
+
+.payment-history-table-wrap {
+  overflow-x: auto;
+}
+
+.payment-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.payment-history-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.payment-history-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.payment-history-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.payment-history-table .td-method {
+  text-transform: capitalize;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.payment-history-table .td-amount {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.payment-empty {
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 8px 0;
+  margin: 0;
+}
+
+/* Reuse type tags from Reports but keep them local */
+.payment-history-table .type-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.payment-history-table .type-new_plan {
+  background: rgba(198, 255, 61, 0.15);
+  color: var(--accent);
+}
+
+.payment-history-table .type-renewal {
+  background: rgba(77, 168, 255, 0.15);
+  color: #4da8ff;
+}
+
+.payment-history-table .type-top_up {
+  background: rgba(255, 159, 10, 0.15);
+  color: var(--warn);
+}
+
+.payment-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.payment-create-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 6px 0;
+}
+
+/* New Plan Payment */
+.newplan-payment-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.newplan-payment-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.newplan-balance {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.newplan-balance strong.danger {
+  color: var(--danger);
+}
+
+.newplan-payment-form {
+  margin-bottom: 0;
+}
+
+.newplan-payment-muted {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin: 0;
+  padding: 4px 0;
+}
+
+@media (max-width: 700px) {
+  .payment-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

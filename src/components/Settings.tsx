@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
+import { log } from '../lib/logger'
 
 interface SettingsState {
   appName: string
@@ -10,6 +11,15 @@ interface SettingsState {
   enableNotifications: boolean
   appLogo: string
 }
+
+type UpdateStatusState =
+  | { type: 'idle' }
+  | { type: 'checking'; message: string }
+  | { type: 'available'; message: string; version?: string }
+  | { type: 'downloading'; message: string; percent: number }
+  | { type: 'downloaded'; message: string; version?: string }
+  | { type: 'up-to-date'; message: string }
+  | { type: 'error'; message: string }
 
 type BannerState =
   | { type: 'none' }
@@ -29,6 +39,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
   })
   const [saved, setSaved] = useState(false)
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
 
   useEffect(() => {
     loadSettings()
@@ -62,6 +73,13 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       })
       setSaved(true)
       if (onAppNameChange) onAppNameChange(settings.appName)
+      log.updateSettings({
+        scannerEnabled: settings.scannerEnabled,
+        matchThreshold: settings.matchThreshold,
+        autoLockTimeout: settings.autoLockTimeout,
+        showMemberPhotos: settings.showMemberPhotos,
+        enableNotifications: settings.enableNotifications,
+      })
       setTimeout(() => setSaved(false), 2000)
     } catch (error) {
       console.error('Failed to save settings:', error)
@@ -78,6 +96,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       const base64 = reader.result as string
       setSettings(prev => ({ ...prev, appLogo: base64 }))
       if (onAppLogoChange) onAppLogoChange(base64)
+      log.uploadLogo()
       // Auto-save the logo immediately
       try {
         await window.electronAPI.saveSetting('appLogo', base64)
@@ -91,6 +110,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
   const handleRemoveLogo = async () => {
     setSettings(prev => ({ ...prev, appLogo: '' }))
     if (onAppLogoChange) onAppLogoChange('')
+    log.removeLogo()
     try {
       await window.electronAPI.saveSetting('appLogo', '')
     } catch (error) {
@@ -105,6 +125,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       const result = await window.electronAPI.createBackup()
       if (result.success) {
         setBackupBanner({ type: 'success', message: `Backup saved successfully!` })
+        if (result.path) log.createBackup(result.path)
       } else if (result.reason === 'cancelled') {
         setBackupBanner({ type: 'none' })
       } else {
@@ -128,6 +149,7 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
       const result = await window.electronAPI.restoreBackup()
       if (result.success) {
         setBackupBanner({ type: 'success', message: 'Backup restored successfully! Reloading data...' })
+        log.restoreBackup()
         // Reload settings after restore
         await loadSettings()
       } else if (result.reason === 'cancelled') {
@@ -138,6 +160,46 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
     } catch (error: any) {
       setBackupBanner({ type: 'error', message: `Restore failed: ${error.message}` })
     }
+  }
+
+  // ── Auto-update ──
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onUpdateStatus((status) => {
+      switch (status.status) {
+        case 'checking':
+          setUpdateStatus({ type: 'checking', message: status.message })
+          break
+        case 'available':
+          setUpdateStatus({ type: 'available', message: status.message, version: status.version })
+          break
+        case 'up-to-date':
+          setUpdateStatus({ type: 'up-to-date', message: status.message })
+          setTimeout(() => setUpdateStatus({ type: 'idle' }), 4000)
+          break
+        case 'downloading':
+          setUpdateStatus({ type: 'downloading', message: status.message, percent: status.percent ?? 0 })
+          break
+        case 'downloaded':
+          setUpdateStatus({ type: 'downloaded', message: status.message, version: status.version })
+          break
+        case 'error':
+          setUpdateStatus({ type: 'error', message: status.message })
+          break
+      }
+    })
+    return unsubscribe
+  }, [])
+
+  const handleCheckForUpdates = async () => {
+    setUpdateStatus({ type: 'checking', message: 'Checking for updates...' })
+    const result = await window.electronAPI.checkForUpdates()
+    if (result.status === 'error') {
+      setUpdateStatus({ type: 'error', message: result.message || 'Failed to check for updates' })
+    }
+  }
+
+  const handleRestartApp = () => {
+    window.electronAPI.restartApp()
   }
 
   const dismissBanner = () => setBackupBanner({ type: 'none' })
@@ -338,6 +400,69 @@ function Settings({ onAppNameChange, onAppLogoChange }: { onAppNameChange?: (nam
               )}
             </div>
           )}
+        </section>
+
+        <section className="settings-section">
+          <h2 className="section-title">Updates</h2>
+          <div className="settings-group">
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Check for Updates</span>
+                <span className="setting-description">
+                  Check if a new version of REPCHECK is available for download
+                </span>
+              </div>
+              {updateStatus.type === 'idle' && (
+                <button className="btn btn-primary" onClick={handleCheckForUpdates}>
+                  🔍 Check for Updates
+                </button>
+              )}
+              {updateStatus.type === 'checking' && (
+                <div className="update-status checking">
+                  <div className="update-spinner" />
+                  <span>{updateStatus.message}</span>
+                </div>
+              )}
+              {updateStatus.type === 'available' && (
+                <div className="update-status available">
+                  <span className="update-icon">📥</span>
+                  <span>{updateStatus.message}</span>
+                </div>
+              )}
+              {updateStatus.type === 'downloading' && (
+                <div className="update-status downloading">
+                  <div className="update-progress-bar">
+                    <div className="update-progress-fill" style={{ width: `${updateStatus.percent}%` }} />
+                  </div>
+                  <span>{updateStatus.message}</span>
+                </div>
+              )}
+              {updateStatus.type === 'downloaded' && (
+                <div className="update-status downloaded">
+                  <span className="update-icon">✅</span>
+                  <span>Update ready! v{updateStatus.version}</span>
+                  <button className="btn btn-primary btn-sm" onClick={handleRestartApp}>
+                    🔄 Restart Now
+                  </button>
+                </div>
+              )}
+              {updateStatus.type === 'up-to-date' && (
+                <div className="update-status up-to-date">
+                  <span className="update-icon">✅</span>
+                  <span>{updateStatus.message}</span>
+                </div>
+              )}
+              {updateStatus.type === 'error' && (
+                <div className="update-status error">
+                  <span className="update-icon">⚠️</span>
+                  <span>{updateStatus.message}</span>
+                  <button className="btn btn-secondary btn-sm" onClick={handleCheckForUpdates}>
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </section>
 
         <div className="settings-actions">

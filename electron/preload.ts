@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPayments: (memberId?: number) => ipcRenderer.invoke('get-payments', memberId),
   createPayment: (payment: any) => ipcRenderer.invoke('create-payment', payment),
 
+  // Reports
+  getDailyReport: (date: string) => ipcRenderer.invoke('get-daily-report', date),
+  getMonthlyReport: (yearMonth: string) => ipcRenderer.invoke('get-monthly-report', yearMonth),
+
+  // Activity Logs
+  createActivityLog: (log: any) => ipcRenderer.invoke('create-activity-log', log),
+  getActivityLogs: (limit?: number) => ipcRenderer.invoke('get-activity-logs', limit),
+
   // Backup & Restore
   createBackup: () => ipcRenderer.invoke('create-backup'),
   restoreBackup: () => ipcRenderer.invoke('restore-backup'),
@@ -70,4 +78,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   saveSetting: (key: string, value: string) => ipcRenderer.invoke('save-setting', key, value),
   saveSettings: (settings: Record<string, string>) => ipcRenderer.invoke('save-settings', settings),
+
+  // Auto-update
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  restartApp: () => ipcRenderer.invoke('restart-app'),
+  onUpdateStatus: (callback: (status: any) => void) => {
+    const handler = (_: any, status: any) => callback(status)
+    ipcRenderer.on('update-status', handler)
+    return () => ipcRenderer.removeListener('update-status', handler)
+  },
 })
