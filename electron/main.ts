@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, screen } from 'electron'
+import os from 'os'
 import path from 'path'
 import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
@@ -151,6 +152,17 @@ function initDatabase() {
   }
 
   return db
+}
+
+// ── Utility: Generate a unique machine ID ──
+function getMachineId(): string {
+  const raw = `${os.hostname()}-${os.platform()}-${app.getPath('userData')}`
+  let hash = 0
+  for (let i = 0; i < raw.length; i++) {
+    hash = ((hash << 5) - hash) + raw.charCodeAt(i)
+    hash = hash & hash
+  }
+  return `${Math.abs(hash).toString(16).padStart(8, '0')}-${os.hostname().slice(0, 8).padEnd(8, '_')}`
 }
 
 function createWindow() {
@@ -1057,6 +1069,50 @@ function setupIPC() {
 
   ipcMain.handle('restart-app', () => {
     autoUpdater.quitAndInstall()
+  })
+
+  // ── License Activation ──
+  ipcMain.handle('validate-license', async (_, licenseKey: string) => {
+    try {
+      const machineId = getMachineId()
+
+      const response = await fetch('https://dtr-license-server.jencendencia.workers.dev/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: licenseKey, machineId }),
+      })
+
+      const data = await response.json() as { valid: boolean; message: string }
+
+      if (data.valid) {
+        // Save license info to settings
+        db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('license_key', licenseKey)
+        db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('machine_id', machineId)
+        return { valid: true, message: data.message || 'License activated successfully!' }
+      }
+
+      return { valid: false, message: data.message || 'Invalid license key.' }
+    } catch (error: any) {
+      console.error('License validation error:', error)
+      return { valid: false, message: 'Could not connect to license server. Check your internet connection.' }
+    }
+  })
+
+  ipcMain.handle('get-license-info', async () => {
+    try {
+      const keyRow = db?.prepare('SELECT value FROM settings WHERE key = ?').get('license_key') as any
+      const machineRow = db?.prepare('SELECT value FROM settings WHERE key = ?').get('machine_id') as any
+
+      const currentMachineId = getMachineId()
+
+      return {
+        activated: !!(keyRow?.value && machineRow?.value === currentMachineId),
+        machineId: currentMachineId,
+        storedMachineId: machineRow?.value || null,
+      }
+    } catch (error) {
+      return { activated: false, machineId: null, storedMachineId: null }
+    }
   })
 
   // Window controls

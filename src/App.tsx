@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import Kiosk from './components/Kiosk'
+import Activation from './components/Activation'
 import RightPanel from './components/RightPanel'
 import Members from './components/Members'
 import Plans from './components/Plans'
@@ -24,6 +25,7 @@ const isKioskMode = () => {
 }
 
 function App() {
+  const [activated, setActivated] = useState<boolean | null>(null)
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
   const [appName, setAppName] = useState('REPCHECK')
   const [appLogo, setAppLogo] = useState('')
@@ -38,6 +40,7 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date())
 
   useEffect(() => {
+    checkActivation()
     loadAppName()
     loadAppLogo()
     loadData()
@@ -46,6 +49,20 @@ function App() {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
+
+  const checkActivation = async () => {
+    try {
+      const info = await window.electronAPI.getLicenseInfo()
+      if (info.activated) {
+        setActivated(true)
+      } else {
+        setActivated(false)
+      }
+    } catch {
+      // If electronAPI not available, assume activated (e.g. in browser dev mode)
+      setActivated(true)
+    }
+  }
 
   const loadAppName = async () => {
     try {
@@ -115,6 +132,28 @@ function App() {
     }
   }
 
+  // Waiting for activation check
+  if (activated === null) {
+    return (
+      <div className="app">
+        <div className="activation-loading-screen">
+          <div className="spinner" />
+          <p>Checking license...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Not activated — show activation screen
+  if (!activated) {
+    return (
+      <div className="app">
+        <Activation />
+      </div>
+    )
+  }
+
+  // Activated — show the normal app
   // If in kiosk mode (separate window on external monitor), render only the kiosk — no chrome
   if (isKioskMode()) {
     return (

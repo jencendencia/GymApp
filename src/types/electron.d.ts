@@ -76,6 +76,10 @@ export interface ElectronAPI {
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
 
+  // License Activation
+  validateLicense: (key: string) => Promise<{ valid: boolean; message: string }>
+  getLicenseInfo: () => Promise<{ activated: boolean; machineId: string | null; storedMachineId: string | null }>
+
   // Auto-update
   checkForUpdates: () => Promise<{ status: string; message?: string }>
   restartApp: () => Promise<void>

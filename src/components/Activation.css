@@ -1,0 +1,212 @@
+/* ── Activation Screen ── */
+.activation-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, #1a1d24 0%, #0e1015 100%);
+  z-index: 99999;
+}
+
+.activation-card {
+  width: 440px;
+  max-width: 90vw;
+  background: var(--surface, #1e2028);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 16px;
+  padding: 48px 40px 40px;
+  text-align: center;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  animation: activation-float-in 0.5s ease-out;
+}
+
+@keyframes activation-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.activation-logo-container {
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: center;
+}
+
+.activation-logo {
+  width: 80px;
+  height: 80px;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.activation-logo-placeholder {
+  width: 80px;
+  height: 80px;
+  border-radius: 16px;
+  background: rgba(88, 204, 124, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activation-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+  margin: 0 0 6px;
+  letter-spacing: 0.02em;
+}
+
+.activation-subtitle {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  color: var(--text-muted, #8b8fa3);
+  margin: 0 0 32px;
+}
+
+/* Input Group */
+.activation-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.activation-input {
+  width: 100%;
+  padding: 14px 18px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: var(--text-primary, #ffffff);
+  background: var(--bg-primary, #14161c);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+
+.activation-input::placeholder {
+  letter-spacing: 0.02em;
+  font-family: 'Inter', sans-serif;
+  color: var(--text-muted, #5a5d6a);
+}
+
+.activation-input:focus {
+  border-color: var(--accent, #58cc7c);
+  box-shadow: 0 0 0 3px rgba(88, 204, 124, 0.12);
+}
+
+.activation-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.activation-btn {
+  width: 100%;
+  padding: 13px 24px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #0e1015;
+  background: var(--accent, #58cc7c);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+}
+
+.activation-btn:hover:not(:disabled) {
+  background: #4dba6e;
+  box-shadow: 0 4px 16px rgba(88, 204, 124, 0.25);
+  transform: translateY(-1px);
+}
+
+.activation-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.activation-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.activation-btn-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Status message */
+.activation-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  margin-bottom: 20px;
+  animation: activation-slide-in 0.25s ease-out;
+}
+
+@keyframes activation-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.activation-message--success {
+  background: rgba(88, 204, 124, 0.1);
+  color: var(--accent, #58cc7c);
+  border: 1px solid rgba(88, 204, 124, 0.2);
+}
+
+.activation-message--error {
+  background: rgba(255, 77, 77, 0.08);
+  color: #ff4d4d;
+  border: 1px solid rgba(255, 77, 77, 0.15);
+}
+
+/* Info text */
+.activation-info {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  color: var(--text-muted, #6b6f82);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.activation-link {
+  color: var(--accent, #58cc7c);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.activation-link:hover {
+  color: #4dba6e;
+  text-decoration: underline;
+}
+
+/* Spinner */
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(14, 16, 21, 0.25);
+  border-top-color: #0e1015;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

@@ -83,6 +83,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSetting: (key: string, value: string) => ipcRenderer.invoke('save-setting', key, value),
   saveSettings: (settings: Record<string, string>) => ipcRenderer.invoke('save-settings', settings),
 
+  // License Activation
+  validateLicense: (key: string) => ipcRenderer.invoke('validate-license', key),
+  getLicenseInfo: () => ipcRenderer.invoke('get-license-info'),
+
   // Auto-update
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   restartApp: () => ipcRenderer.invoke('restart-app'),
