@@ -1,6 +1,6 @@
 {
   "name": "repcheck",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "REPCHECK - Fingerprint Gym Check-In System",
   "main": "dist-electron/main.js",
   "scripts": {
