@@ -21,6 +21,8 @@ export interface ElectronAPI {
   // Check-ins
   getCheckins: (date?: string) => Promise<Checkin[]>
   createCheckin: (checkin: CreateCheckinInput) => Promise<any>
+  getActiveCheckins: () => Promise<ActiveCheckin[]>
+  checkoutMember: (checkinId: number) => Promise<{ success: boolean }>
 
   // Stats
   getTodayStats: () => Promise<TodayStats>
@@ -203,9 +205,14 @@ export interface Checkin {
   method: 'fingerprint' | 'manual'
   match_confidence?: number
   status: 'success' | 'failed' | 'override'
+  checked_out_at?: string
   name?: string
   member_code?: string
   member_photo?: string
+}
+
+export interface ActiveCheckin extends Checkin {
+  balance?: number
 }
 
 export interface CreateCheckinInput {

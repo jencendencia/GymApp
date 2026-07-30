@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Check-ins
   getCheckins: (date?: string) => ipcRenderer.invoke('get-checkins', date),
   createCheckin: (checkin: any) => ipcRenderer.invoke('create-checkin', checkin),
+  getActiveCheckins: () => ipcRenderer.invoke('get-active-checkins'),
+  checkoutMember: (checkinId: number) => ipcRenderer.invoke('checkout-member', checkinId),
 
   // Stats
   getTodayStats: () => ipcRenderer.invoke('get-today-stats'),

@@ -142,6 +142,7 @@ function initDatabase() {
     { table: 'coaches', column: 'professional_fee', def: 'REAL DEFAULT 0' },
     { table: 'payments', column: 'payment_method', def: 'TEXT DEFAULT \'cash\'' },
     { table: 'payments', column: 'staff_id', def: 'INTEGER DEFAULT NULL' },
+    { table: 'checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
   ]
   for (const col of columnsToAdd) {
     try {
@@ -426,6 +427,23 @@ function setupIPC() {
       ORDER BY c.timestamp DESC
       LIMIT 100
     `).all()
+  })
+
+  ipcMain.handle('get-active-checkins', () => {
+    const today = new Date().toISOString().split('T')[0]
+    return db?.prepare(`
+      SELECT c.*, m.name, m.member_id as member_code, m.photo as member_photo, m.balance
+      FROM checkins c
+      JOIN members m ON c.member_id = m.id
+      WHERE DATE(c.timestamp) = ? AND c.checked_out_at IS NULL
+      ORDER BY c.timestamp ASC
+    `).all(today) || []
+  })
+
+  ipcMain.handle('checkout-member', (_, checkinId: number) => {
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    db?.prepare('UPDATE checkins SET checked_out_at = ? WHERE id = ?').run(now, checkinId)
+    return { success: true }
   })
 
   ipcMain.handle('create-checkin', (_, checkin) => {

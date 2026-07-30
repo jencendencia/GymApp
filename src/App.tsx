@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import './App.css'
 import Sidebar from './components/Sidebar'
 import Kiosk from './components/Kiosk'
+import Dashboard from './components/Dashboard'
 import Activation from './components/Activation'
 import RightPanel from './components/RightPanel'
 import Members from './components/Members'
@@ -36,6 +37,7 @@ function App() {
     expiringThisWeek: 0,
   })
   const [recentCheckins, setRecentCheckins] = useState<Checkin[]>([])
+  const [activeCheckins, setActiveCheckins] = useState<Checkin[]>([])
   const [expiringSoon, setExpiringSoon] = useState<Member[]>([])
   const [currentTime, setCurrentTime] = useState(new Date())
 
@@ -92,6 +94,10 @@ function App() {
       setStats(todayStats)
       setRecentCheckins(checkins.slice(0, 10))
       setExpiringSoon(expiring)
+
+      // Also load active checkins for the right panel
+      const active = await window.electronAPI.getActiveCheckins()
+      setActiveCheckins(active)
     } catch (error) {
       console.error('Failed to load data:', error)
     }
@@ -112,7 +118,14 @@ function App() {
   const renderScreen = () => {
     switch (activeScreen) {
       case 'kiosk':
-        return <Kiosk onRefresh={loadData} />
+        return (
+          <Dashboard
+            stats={stats}
+            recentCheckins={activeCheckins}
+            expiringSoon={expiringSoon}
+            onRefresh={loadData}
+          />
+        )
       case 'members':
         return <Members />
       case 'coach':
@@ -198,7 +211,7 @@ function App() {
         {activeScreen === 'kiosk' && (
           <RightPanel
             stats={stats}
-            recentCheckins={recentCheckins}
+            recentCheckins={activeCheckins.length > 0 ? activeCheckins.slice(0, 8) : recentCheckins.slice(0, 8)}
             expiringSoon={expiringSoon}
             currentTime={currentTime}
           />
