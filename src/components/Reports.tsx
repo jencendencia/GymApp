@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './Reports.css'
 import { DailyReport, MonthlyReport } from '../types/electron'
+import { todayLocal, todayLocalOf } from '../lib/dates'
 
 interface EmailResult {
   success: boolean
@@ -25,7 +26,7 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
   }
 
   // Daily state
-  const [dailyDate, setDailyDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [dailyDate, setDailyDate] = useState(() => todayLocal())
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null)
 
   // Monthly state
@@ -38,6 +39,7 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
   const [emailRecipient, setEmailRecipient] = useState('')
   const [emailSending, setEmailSending] = useState(false)
   const [emailResult, setEmailResult] = useState<EmailResult | null>(null)
+  const [reminderState, setReminderState] = useState<{ sending: boolean; result: string | null; error: string | null }>({ sending: false, result: null, error: null })
 
   // ── Load data ──
   const loadDaily = useCallback(async (date: string) => {
@@ -82,10 +84,8 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
   const goNextDay = () => {
     const [y, mo, d] = dailyDate.split('-').map(Number)
     const date = new Date(y, mo - 1, d + 1)
-    const nextStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    const today = new Date()
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-    if (nextStr <= todayStr) setDailyDate(nextStr)
+    const nextStr = todayLocalOf(date)
+    if (nextStr <= todayLocal()) setDailyDate(nextStr)
   }
 
   const goPrevMonth = () => {
@@ -145,6 +145,62 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
           />
         </div>
         <span className="breakdown-bar-pct mono-text">{pct.toFixed(1)}%</span>
+      </div>
+    )
+  }
+
+  // ── SVG line chart (weekly revenue trend) — no external chart library needed ──
+  const RevenueLineChart = ({ data }: { data: { week: string; count: number; total: number }[] }) => {
+    if (!data || data.length === 0) return <p className="empty-breakdown">No data this month</p>
+
+    const W = 520
+    const H = 210
+    const PAD_L = 62
+    const PAD_R = 14
+    const PAD_T = 16
+    const PAD_B = 34
+    const maxVal = Math.max(...data.map(d => d.total), 1)
+    const innerW = W - PAD_L - PAD_R
+    const innerH = H - PAD_T - PAD_B
+    const stepX = data.length > 1 ? innerW / (data.length - 1) : 0
+    const pts = data.map((d, i) => ({
+      x: PAD_L + i * stepX,
+      y: PAD_T + innerH - (d.total / maxVal) * innerH,
+      ...d,
+    }))
+    const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+    const lastX = pts.length > 0 ? pts[pts.length - 1].x : PAD_L
+    const areaPath = `${linePath} L${lastX.toFixed(1)},${(PAD_T + innerH).toFixed(1)} L${PAD_L},${(PAD_T + innerH).toFixed(1)} Z`
+    const gridLines = [0, 0.25, 0.5, 0.75, 1].map(t => ({
+      y: PAD_T + innerH - t * innerH,
+      label: fmtCurrency(maxVal * t),
+    }))
+
+    return (
+      <div className="trend-line-chart">
+        <svg viewBox={`0 0 ${W} ${H}`} className="trend-line-svg" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="lineAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--accent, #c6ff3d)" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="var(--accent, #c6ff3d)" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {gridLines.map((g, i) => (
+            <g key={i}>
+              <line x1={PAD_L} y1={g.y.toFixed(1)} x2={W - PAD_R} y2={g.y.toFixed(1)} className="line-grid" />
+              <text x={PAD_L - 8} y={(g.y + 4).toFixed(1)} textAnchor="end" className="line-grid-label">{g.label}</text>
+            </g>
+          ))}
+          <path d={areaPath} fill="url(#lineAreaGrad)" className="line-area" />
+          <path d={linePath} fill="none" className="line-stroke" />
+          {pts.map((p, i) => (
+            <g key={i}>
+              <circle cx={p.x.toFixed(1)} cy={p.y.toFixed(1)} r="4.5" className="line-dot" />
+              <title>{`${p.week}: ${fmtCurrency(p.total)}`}</title>
+              <text x={p.x.toFixed(1)} y={H - 14} textAnchor="middle" className="line-x-label">{p.week}</text>
+            </g>
+          ))}
+        </svg>
       </div>
     )
   }
@@ -283,7 +339,7 @@ ${buildTable(
 
 <div class="section-title">Transaction Details</div>
 ${buildTable(
-  ['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Amount', 'Time'],
+  ['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Status', 'Amount', 'Time'],
   daily.transactions.map(t => {
     const flagged = daily.outstanding.some(o => o.id === t.member_id)
     return [
@@ -292,11 +348,12 @@ ${buildTable(
       t.plan_name || '—',
       typeTag(t.type),
       (t.payment_method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      `<span class="tag tag-status">${esc(t.status || 'completed')}</span>`,
       fmtCurrency(t.amount),
       fmtTime(t.created_at),
     ]
   }),
-  ['TOTAL', '', '', '', '', fmtCurrency(daily.totalRevenue), '']
+  ['TOTAL', '', '', '', '', '', fmtCurrency(daily.totalRevenue), '']
 )}
 
 <div class="footer">Report generated ${now} — ${esc(appName)}</div>
@@ -744,6 +801,7 @@ ${buildTable(
     cash: '#4da8ff',
     card: '#5e5ce6',
     gcash: '#00c853',
+    maya: '#00b2e3',
     bank_transfer: '#ff9f0a',
     other: '#8e8e93',
   }
@@ -751,7 +809,7 @@ ${buildTable(
   const defaultMethodColor = '#4da8ff'
 
   // Check if date is today (for next-day disabling)
-  const isToday = dailyDate === new Date().toISOString().split('T')[0]
+  const isToday = dailyDate === todayLocal()
 
   // ── Date picker handlers ──
   const handleDatePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -766,6 +824,81 @@ ${buildTable(
       setMonthYear(e.target.value)
       setShowDatePicker(false)
     }
+  }
+
+  // ── Renewal reminder emails ──
+  const handleSendRenewalReminders = async () => {
+    setReminderState({ sending: true, result: null, error: null })
+    try {
+      const res = await window.electronAPI.sendRenewalReminders()
+      if (res.success) {
+        setReminderState({
+          sending: false,
+          result: `Renewal reminders sent to ${res.sent} member${res.sent === 1 ? '' : 's'}${res.skipped > 0 ? ` (${res.skipped} skipped — already sent or no email)` : ''}.`,
+          error: null,
+        })
+      } else {
+        setReminderState({ sending: false, result: null, error: res.message || 'Failed to send reminders. Check SMTP settings.' })
+      }
+    } catch (error: any) {
+      setReminderState({ sending: false, result: null, error: error.message })
+    }
+  }
+
+
+
+  // ── Printable receipt (opens a print window) ──
+  const handlePrintReceipt = (t: { id: number; member_name?: string; member_code?: string; plan_name?: string; type: string; payment_method?: string; amount: number; created_at: string }) => {
+    const escReceipt = (s: string | undefined | null) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Receipt ${t.id}</title>
+<style>
+  body { font-family: 'Courier New', monospace; width: 300px; margin: 0 auto; color: #000; font-size: 12px; }
+  .center { text-align: center; }
+  .line { border-top: 1px dashed #000; margin: 8px 0; }
+  table { width: 100%; }
+  td { padding: 2px 0; }
+  .amt { text-align: right; font-weight: bold; }
+  h1 { font-size: 16px; margin: 8px 0 0; }
+</style></head><body>
+  <div class="center">
+    <h1>${escReceipt(appName)}</h1>
+    <div>Payment Receipt</div>
+    <div>Receipt #${t.id}</div>
+    <div>${new Date(t.created_at.replace(' ', 'T') + 'Z').toLocaleString()}</div>
+  </div>
+  <div class="line"></div>
+  <table>
+    <tr><td>Member</td><td>${escReceipt(t.member_name || 'Unknown')}</td></tr>
+    <tr><td>Member ID</td><td>${escReceipt(t.member_code || '')}</td></tr>
+    <tr><td>Plan</td><td>${escReceipt(t.plan_name || '—')}</td></tr>
+    <tr><td>Type</td><td>${escReceipt(t.type.replace(/_/g, ' '))}</td></tr>
+    <tr><td>Method</td><td>${escReceipt((t.payment_method || 'cash').replace(/_/g, ' '))}</td></tr>
+    <tr><td class="amt">TOTAL</td><td class="amt">₱${t.amount.toFixed(2)}</td></tr>
+  </table>
+  <div class="line"></div>
+  <div class="center">Thank you!</div>
+  <script>window.onload = () => window.print()</script>
+</body></html>`
+    const win = window.open('', '_blank', 'width=360,height=500')
+    if (!win) {
+      alert('Please allow pop-ups to print the receipt.')
+      return
+    }
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+  }
+
+  // Open the email modal, pre-filling the default owner email from Settings if set
+  const openEmailModal = async () => {
+    setEmailRecipient('')
+    setEmailResult(null)
+    setShowEmailModal(true)
+    try {
+      const owner = await window.electronAPI.getSetting('reportOwnerEmail')
+      if (owner) setEmailRecipient(owner)
+    } catch { /* ignore */ }
   }
 
   const handlePickerBlur = (e: React.FocusEvent<HTMLInputElement>) => {
@@ -788,11 +921,21 @@ ${buildTable(
           <button className="btn btn-primary btn-sm" onClick={exportPDF} title="Print / Export as PDF">
             🖨️ PDF
           </button>
-          <button className="btn btn-sm" onClick={() => { setEmailRecipient(''); setEmailResult(null); setShowEmailModal(true) }} title="Send report via email" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+          <button className="btn btn-sm" onClick={handleSendRenewalReminders} disabled={reminderState.sending} title="Email renewal reminders to members expiring within 7 days" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+            {reminderState.sending ? 'Sending...' : '📧 Reminders'}
+          </button>
+          <button className="btn btn-sm" onClick={() => { openEmailModal() }} title="Send report via email" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
             📧 Email
           </button>
         </div>
       </div>
+
+      {reminderState.result && (
+        <div className="reports-reminder-banner success">✅ {reminderState.result}</div>
+      )}
+      {reminderState.error && (
+        <div className="reports-reminder-banner error">❌ {reminderState.error}</div>
+      )}
 
       {/* ── View tabs + Date nav ── */}
       <div className="reports-controls">
@@ -820,7 +963,7 @@ ${buildTable(
                   type="date"
                   className="input date-picker-input"
                   value={dailyDate}
-                  max={new Date().toISOString().split('T')[0]}
+                  max={todayLocal()}
                   onChange={handleDatePickerChange}
                   onBlur={handlePickerBlur}
                   onKeyDown={(e) => e.key === 'Escape' && setShowDatePicker(false)}
@@ -973,25 +1116,7 @@ ${buildTable(
               <div className="breakdown-grid">
                 <div className="breakdown-panel">
                   <h3 className="panel-title">Weekly Revenue Trend</h3>
-                  <div className="trend-chart">
-                    {monthlyReport.weekly.length === 0 ? (
-                      <p className="empty-breakdown">No data this month</p>
-                    ) : (
-                      monthlyReport.weekly.map(item => {
-                        const maxVal = Math.max(...monthlyReport.weekly.map(w => w.total), 1)
-                        const barH = (item.total / maxVal) * 100
-                        return (
-                          <div key={item.week} className="trend-bar-col">
-                            <span className="trend-bar-val mono-text">{fmtCurrency(item.total)}</span>
-                            <div className="trend-bar-track">
-                              <div className="trend-bar-fill" style={{ height: `${barH}%` }} />
-                            </div>
-                            <span className="trend-bar-label">{item.week}</span>
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
+                  <RevenueLineChart data={monthlyReport.weekly} />
                 </div>
                 <div className="breakdown-panel">
                   <h3 className="panel-title">Revenue by Plan Type</h3>
@@ -1070,8 +1195,10 @@ ${buildTable(
                         <th>Plan</th>
                         <th>Type</th>
                         <th>Method</th>
+                        <th>Status</th>
                         <th>Amount</th>
                         <th>Time</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1091,8 +1218,16 @@ ${buildTable(
                               </span>
                             </td>
                             <td className="td-method">{t.payment_method || 'cash'}</td>
+                            <td>
+                              <span className={`pay-status ${t.status || 'completed'}`}>
+                                {t.status || 'completed'}
+                              </span>
+                            </td>
                             <td className="mono-text td-amount">{fmtCurrency(t.amount)}</td>
                             <td className="mono-text td-time">{fmtTime(t.created_at)}</td>
+                            <td className="td-receipt" style={{ textAlign: 'center' }}>
+                              <button className="btn btn-secondary btn-sm" onClick={() => handlePrintReceipt(t)} title="Print receipt">🧾</button>
+                            </td>
                           </tr>
                         )
                       })}
@@ -1255,15 +1390,16 @@ ${buildTable(['Type', 'Transactions', 'Total'], daily.byType.map(i => [i.type.re
 ${buildTable(['Method', 'Transactions', 'Total'], daily.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(daily.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)])}
 ${daily.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances</div>\n${buildTable(['Member', 'Member ID', 'Balance'], daily.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]), ['Total Outstanding', '', fmtCurrency(daily.outstanding.reduce((s, o) => s + o.balance, 0))])}` : ''}
 <div class="section-title">Transaction Details</div>
-${buildTable(['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Amount', 'Time'], daily.transactions.map(t => {
+${buildTable(['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Status', 'Amount', 'Time'], daily.transactions.map(t => {
   const flagged = daily.outstanding.some(o => o.id === t.member_id)
   return [
     `<span${flagged ? ' style="color:#c62828;font-weight:600;"' : ''}>${esc(t.member_name || 'Unknown')}</span>`,
     t.member_code || '', t.plan_name || '—', typeTag(t.type),
     (t.payment_method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    `<span class="tag tag-status">${esc(t.status || 'completed')}</span>`,
     fmtCurrency(t.amount), fmtTime(t.created_at),
   ]
-}), ['TOTAL', '', '', '', '', fmtCurrency(daily.totalRevenue), ''])}
+}), ['TOTAL', '', '', '', '', '', fmtCurrency(daily.totalRevenue), ''])}
 <div class="footer">Report generated ${now} — ${esc(appName)}</div>
 </body></html>`
                     } else if (view === 'monthly' && monthlyReport) {

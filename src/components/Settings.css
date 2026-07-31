@@ -306,9 +306,25 @@
   color: var(--text-muted, #9aa0a6);
 }
 
+.update-status.backing-up {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  color: var(--warn, #ffb020);
+  max-width: 320px;
+}
+
 .update-status.downloaded {
   color: #4cd964;
   gap: 10px;
+}
+
+.update-status-hint {
+  font-size: 11px;
+  color: var(--text-faint, #6b7280);
+  font-weight: 400;
+  max-width: 220px;
+  text-align: right;
 }
 
 .update-status.up-to-date {
@@ -480,4 +496,10 @@
 
 .settings-fieldset[disabled] select.input {
   cursor: not-allowed;
+}
+
+/* P2 5.7: theme toggle buttons */
+.theme-toggle-row {
+  display: flex;
+  gap: 8px;
 }

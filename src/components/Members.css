@@ -311,6 +311,19 @@
   min-width: 0;
 }
 
+/* ── Member Form Cards ── */
+.member-form-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.member-form-card:last-child {
+  margin-bottom: 0;
+}
+
 .section-label {
   display: block;
   font-size: 12px;
@@ -640,7 +653,8 @@
 /* ── Payment Section ── */
 .payment-section {
   border-top: 1px solid var(--border);
-  padding: 20px 24px;
+  margin-top: 24px;
+  padding: 20px 0 0;
 }
 
 .payment-section-header {
@@ -696,6 +710,66 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* ── QR Code Modal ── */
+.qr-modal {
+  max-width: 380px !important;
+}
+
+.qr-modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.qr-member-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.qr-member-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.qr-member-id {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.qr-code-container {
+  width: 280px;
+  height: 280px;
+  background: #fff;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+.qr-code-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.qr-loading {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.qr-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
 }
 
 /* Payment History Table */
@@ -803,6 +877,33 @@
   font-style: italic;
 }
 
+/* Member ID suggestion (next sequential ID) */
+.member-id-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.member-id-input-row .input {
+  flex: 1;
+}
+
+.member-id-suggest {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.member-id-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.3;
+}
+
+.member-id-hint strong {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
 .payment-create-note {
   font-size: 11px;
   color: var(--text-faint);
@@ -849,5 +950,215 @@
   .payment-form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Required field indicators ── */
+.req-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--danger);
+  border-radius: 4px;
+  padding: 2px 6px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.field-required-hint {
+  font-size: 11px;
+  color: var(--danger);
+  line-height: 1.3;
+}
+
+.input-required-missing {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 1px var(--danger) !important;
+}
+
+.footer-required-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.footer-required-note.ok {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.footer-required-note.flash {
+  animation: req-shake 0.35s ease;
+}
+
+@keyframes req-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
+
+.enrollment-card-required {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
+/* P1 4.2: pagination footer */
+.members-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 4px 4px;
+  flex-wrap: wrap;
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pagination-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* P2 5.1: member ID card modal */
+.id-card-modal {
+  width: 440px;
+  max-width: 94vw;
+}
+
+.id-card-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 0;
+}
+
+.id-card-front {
+  width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.id-card-top {
+  background: #1a1a2e;
+  color: #fff;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.id-card-brand {
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.id-card-code {
+  font-size: 12px;
+  color: #aab;
+}
+
+.id-card-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 16px 12px;
+}
+
+.id-card-photo {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--border);
+}
+
+.id-card-photo-placeholder {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  font-weight: 700;
+}
+
+.id-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.id-card-name {
+  font-size: 17px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.id-card-plan {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.id-card-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.id-card-label {
+  display: block;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+
+.id-card-value {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.id-card-qr {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  padding: 6px;
+  background: #fff;
+}
+
+.id-card-qr-loading {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 12px;
 }
 

@@ -315,6 +315,20 @@
   font-size: 13px;
 }
 
+.user-form-field .input.mismatch {
+  border-color: #ff4d4d !important;
+  box-shadow: 0 0 0 1px #ff4d4d !important;
+}
+
+.user-form-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.user-form-hint.error {
+  color: #ff4d4d;
+}
+
 .users-modal-footer {
   display: flex;
   justify-content: flex-end;

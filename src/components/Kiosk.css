@@ -491,3 +491,273 @@
   padding: 10px 24px;
   border-radius: 8px;
 }
+
+/* Scanner-disabled note on idle screen */
+.kiosk-scanner-disabled-note {
+  max-width: 420px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(255, 176, 32, 0.12);
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  color: var(--warn);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Renew Plan Modal */
+.kiosk-renew-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.kiosk-renew-modal {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  animation: fade-in 0.2s ease;
+}
+
+.kiosk-renew-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.kiosk-renew-header h2 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.kiosk-renew-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kiosk-renew-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kiosk-renew-field label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kiosk-renew-row {
+  display: flex;
+  gap: 12px;
+}
+
+.kiosk-renew-row .kiosk-renew-field {
+  flex: 1;
+}
+
+.kiosk-renew-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.kiosk-renew-hint {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.kiosk-renew-summary {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.kiosk-renew-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+/* QR Scanner Modal */
+.kiosk-qr-modal {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  animation: fade-in 0.2s ease;
+}
+
+.kiosk-qr-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kiosk-qr-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+
+.kiosk-qr-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.kiosk-qr-guide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.kiosk-qr-frame {
+  width: 180px;
+  height: 180px;
+  border: 3px solid var(--accent);
+  border-radius: 16px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  animation: qr-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes qr-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+
+.kiosk-qr-hint {
+  color: #fff;
+  font-size: 13px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.kiosk-qr-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.75);
+  text-align: center;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ── Idle promo carousel (P2 5.1) ── */
+.kiosk-promo-carousel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 28px;
+  padding: 16px 28px;
+  max-width: 520px;
+  background: var(--surface, #1a1d22);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 16px;
+  animation: fade-in 0.4s ease-out;
+}
+
+.kiosk-promo-icon {
+  font-size: 26px;
+}
+
+.kiosk-promo-text {
+  font-size: 15px;
+  color: var(--text-muted, #9aa1ac);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.kiosk-promo-dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.kiosk-promo-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint, #4a4f58);
+  transition: all 0.3s;
+}
+
+.kiosk-promo-dot.active {
+  background: var(--accent);
+  width: 18px;
+  border-radius: 4px;
+}
+
+/* ── Guest / trial check-in (P2 5.1) ── */
+.kiosk-guest-count {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.kiosk-guest-type-row {
+  display: flex;
+  gap: 10px;
+}
+
+.kiosk-guest-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.guest-success-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(198, 255, 61, 0.15);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  animation: guest-pop 0.4s ease-out;
+}
+
+@keyframes guest-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  70% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}

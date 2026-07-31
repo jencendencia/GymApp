@@ -15,6 +15,9 @@ import Users from './components/Users'
 import ActivityLog from './components/ActivityLog'
 import Reports from './components/Reports'
 import { Member, TodayStats, Checkin, StaffUser } from './types/electron'
+import GlobalSearch from './components/GlobalSearch'
+import { setLogUser } from './lib/logger'
+import { todayLocal } from './lib/dates'
 
 type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings' | 'users'
 
@@ -43,6 +46,20 @@ function App() {
   const [activeCheckins, setActiveCheckins] = useState<Checkin[]>([])
   const [expiringSoon, setExpiringSoon] = useState<Member[]>([])
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false)
+  const [membersSearchQuery, setMembersSearchQuery] = useState('')
+
+  // P2 5.7: apply the persisted theme (dark/light) to the document root
+  useEffect(() => {
+    (async () => {
+      try {
+        const theme = await window.electronAPI.getTheme()
+        document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark'
+      } catch {
+        document.documentElement.dataset.theme = 'dark'
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     checkActivation()
@@ -57,11 +74,13 @@ function App() {
 
   const handleLogin = (user: StaffUser) => {
     setLoggedInUser(user)
+    setLogUser(user.username)
     setActiveScreen('kiosk')
   }
 
   const handleLogout = () => {
     setLoggedInUser(null)
+    setLogUser(null)
   }
 
   const checkActivation = async () => {
@@ -98,9 +117,10 @@ function App() {
 
   const loadData = useCallback(async () => {
     try {
+      const today = todayLocal()
       const [todayStats, checkins, expiring] = await Promise.all([
         window.electronAPI.getTodayStats(),
-        window.electronAPI.getCheckins(),
+        window.electronAPI.getCheckins(today),
         window.electronAPI.getExpiringSoon(),
       ])
       setStats(todayStats)
@@ -118,6 +138,34 @@ function App() {
   const handleMinimize = () => window.electronAPI.minimizeWindow()
   const handleMaximize = () => window.electronAPI.maximizeWindow()
   const handleClose = () => window.electronAPI.closeWindow()
+
+  // ── Global search (Ctrl+K) + keyboard shortcuts (P2 5.7) ──
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+K opens global search (skip in kiosk mode)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        if (!isKioskMode() && loggedInUser) setShowGlobalSearch(true)
+        return
+      }
+      // Ctrl+1..8 navigate pages (skip in kiosk mode)
+      if (e.ctrlKey && e.key >= '1' && e.key <= '8' && !isKioskMode() && loggedInUser) {
+        const screens: Screen[] = ['kiosk', 'members', 'coach', 'plans', 'checkins', 'reports', 'activitylog', 'settings']
+        const idx = Number(e.key) - 1
+        if (screens[idx]) setActiveScreen(screens[idx])
+      }
+      // Esc closes global search
+      if (e.key === 'Escape' && showGlobalSearch) setShowGlobalSearch(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [loggedInUser, showGlobalSearch])
+
+  const handleGlobalSelectMember = (member: Member) => {
+    setShowGlobalSearch(false)
+    setMembersSearchQuery(member.member_id)
+    setActiveScreen('members')
+  }
 
   const handleAppNameChange = (name: string) => {
     setAppName(name)
@@ -139,7 +187,7 @@ function App() {
           />
         )
       case 'members':
-        return <Members currentUser={loggedInUser} />
+        return <Members currentUser={loggedInUser} initialSearch={membersSearchQuery} onSearchConsumed={() => setMembersSearchQuery('')} />
       case 'coach':
         return <Coach />
       case 'plans':
@@ -201,6 +249,15 @@ function App() {
 
   return (
     <div className="app">
+      {showGlobalSearch && loggedInUser && (
+        <GlobalSearch
+          onClose={() => setShowGlobalSearch(false)}
+          onSelectMember={handleGlobalSelectMember}
+        />
+      )}
+      {!isKioskMode() && loggedInUser && !showGlobalSearch && (
+        <div className="global-search-trigger">Ctrl+K — search members</div>
+      )}
       {/* Custom titlebar */}
       <div className="titlebar">
         <div className="titlebar-left">

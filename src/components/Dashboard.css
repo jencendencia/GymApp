@@ -373,6 +373,73 @@
   color: var(--danger, #ff4d4d);
 }
 
+/* At-Risk Members list */
+.dash-atrisk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dash-atrisk-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.dash-atrisk-item:hover {
+  background: var(--surface-2, #252830);
+}
+
+.dash-atrisk-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 176, 32, 0.15);
+  color: var(--warn, #ffb020);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Oswald', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.dash-atrisk-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-atrisk-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #e8e9ed);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-atrisk-plan {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint, #5a5d6a);
+}
+
+.dash-atrisk-reason {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--warn, #ffb020);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+  flex-shrink: 0;
+}
+
 /* ── Modal ── */
 .dash-modal-overlay {
   position: fixed;

@@ -2,14 +2,19 @@ import React, { useState, useEffect } from 'react'
 import './Settings.css'
 import { StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
+import ConfirmModal from './ConfirmModal'
 
 interface SettingsState {
   appName: string
   scannerEnabled: boolean
-  matchThreshold: number
   autoLockTimeout: number
   showMemberPhotos: boolean
   enableNotifications: boolean
+  allowMultipleDailyCheckins: boolean
+  backupEnabled: boolean
+  backupHour: number
+  backupKeep: number
+  balanceBlockThreshold: number
   appLogo: string
   kioskLogo: string
   smtpHost: string
@@ -17,6 +22,12 @@ interface SettingsState {
   smtpUser: string
   smtpPass: string
   smtpFromEmail: string
+  reportOwnerEmail: string
+  autoReportEnabled: boolean
+  autoReportHour: number
+  welcomeEmailEnabled: boolean
+  receiptEmailEnabled: boolean
+  theme: 'dark' | 'light'
 }
 
 type UpdateStatusState =
@@ -25,6 +36,7 @@ type UpdateStatusState =
   | { type: 'available'; message: string; version?: string }
   | { type: 'downloading'; message: string; percent: number }
   | { type: 'downloaded'; message: string; version?: string }
+  | { type: 'backing-up'; message: string }
   | { type: 'up-to-date'; message: string }
   | { type: 'error'; message: string }
 
@@ -39,10 +51,14 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   const [settings, setSettings] = useState<SettingsState>({
     appName: 'REPCHECK',
     scannerEnabled: true,
-    matchThreshold: 90,
     autoLockTimeout: 30,
     showMemberPhotos: true,
     enableNotifications: true,
+    allowMultipleDailyCheckins: false,
+    backupEnabled: false,
+    backupHour: 23,
+    backupKeep: 7,
+    balanceBlockThreshold: 0,
     appLogo: '',
     kioskLogo: '',
     smtpHost: '',
@@ -50,26 +66,42 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     smtpUser: '',
     smtpPass: '',
     smtpFromEmail: '',
+    reportOwnerEmail: '',
+    autoReportEnabled: false,
+    autoReportHour: 23,
+    welcomeEmailEnabled: false,
+    receiptEmailEnabled: false,
+    theme: 'dark',
   })
   const [saved, setSaved] = useState(false)
   const [smtpProvider, setSmtpProvider] = useState('')
   const [smtpTestResult, setSmtpTestResult] = useState<BannerState>({ type: 'none' })
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
 
   useEffect(() => {
     loadSettings()
   }, [])
+
+  // P2 5.7: apply the theme immediately when the toggle changes (persisted on Save)
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme
+  }, [settings.theme])
 
   const loadSettings = async () => {
     try {
       const data = await window.electronAPI.getSettings()
       if (data.appName) setSettings(prev => ({ ...prev, appName: data.appName }))
       if (data.scannerEnabled) setSettings(prev => ({ ...prev, scannerEnabled: data.scannerEnabled === 'true' }))
-      if (data.matchThreshold) setSettings(prev => ({ ...prev, matchThreshold: Number(data.matchThreshold) }))
       if (data.autoLockTimeout) setSettings(prev => ({ ...prev, autoLockTimeout: Number(data.autoLockTimeout) }))
       if (data.showMemberPhotos) setSettings(prev => ({ ...prev, showMemberPhotos: data.showMemberPhotos === 'true' }))
       if (data.enableNotifications) setSettings(prev => ({ ...prev, enableNotifications: data.enableNotifications === 'true' }))
+      if (data.allowMultipleDailyCheckins) setSettings(prev => ({ ...prev, allowMultipleDailyCheckins: data.allowMultipleDailyCheckins === 'true' }))
+      if (data.backupEnabled) setSettings(prev => ({ ...prev, backupEnabled: data.backupEnabled === 'true' }))
+      if (data.backupHour) setSettings(prev => ({ ...prev, backupHour: Number(data.backupHour) }))
+      if (data.backupKeep) setSettings(prev => ({ ...prev, backupKeep: Number(data.backupKeep) }))
+      if (data.balanceBlockThreshold) setSettings(prev => ({ ...prev, balanceBlockThreshold: Number(data.balanceBlockThreshold) }))
       if (data.appLogo) setSettings(prev => ({ ...prev, appLogo: data.appLogo }))
       if (data.kioskLogo) setSettings(prev => ({ ...prev, kioskLogo: data.kioskLogo }))
       if (data.smtpHost) {
@@ -84,6 +116,12 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.smtpUser) setSettings(prev => ({ ...prev, smtpUser: data.smtpUser }))
       if (data.smtpPass) setSettings(prev => ({ ...prev, smtpPass: data.smtpPass }))
       if (data.smtpFromEmail) setSettings(prev => ({ ...prev, smtpFromEmail: data.smtpFromEmail }))
+      if (data.reportOwnerEmail) setSettings(prev => ({ ...prev, reportOwnerEmail: data.reportOwnerEmail }))
+      if (data.autoReportEnabled) setSettings(prev => ({ ...prev, autoReportEnabled: data.autoReportEnabled === 'true' }))
+      if (data.autoReportHour) setSettings(prev => ({ ...prev, autoReportHour: Number(data.autoReportHour) }))
+      if (data.welcomeEmailEnabled) setSettings(prev => ({ ...prev, welcomeEmailEnabled: data.welcomeEmailEnabled === 'true' }))
+      if (data.receiptEmailEnabled) setSettings(prev => ({ ...prev, receiptEmailEnabled: data.receiptEmailEnabled === 'true' }))
+      if (data.theme) setSettings(prev => ({ ...prev, theme: data.theme === 'light' ? 'light' : 'dark' }))
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
@@ -94,10 +132,14 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       await window.electronAPI.saveSettings({
         appName: settings.appName,
         scannerEnabled: settings.scannerEnabled.toString(),
-        matchThreshold: settings.matchThreshold.toString(),
         autoLockTimeout: settings.autoLockTimeout.toString(),
         showMemberPhotos: settings.showMemberPhotos.toString(),
         enableNotifications: settings.enableNotifications.toString(),
+        allowMultipleDailyCheckins: settings.allowMultipleDailyCheckins.toString(),
+        backupEnabled: settings.backupEnabled.toString(),
+        backupHour: settings.backupHour.toString(),
+        backupKeep: settings.backupKeep.toString(),
+        balanceBlockThreshold: settings.balanceBlockThreshold.toString(),
         appLogo: settings.appLogo,
         kioskLogo: settings.kioskLogo,
         smtpHost: settings.smtpHost,
@@ -105,15 +147,25 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         smtpUser: settings.smtpUser,
         smtpPass: settings.smtpPass,
         smtpFromEmail: settings.smtpFromEmail,
+        reportOwnerEmail: settings.reportOwnerEmail,
+        autoReportEnabled: settings.autoReportEnabled.toString(),
+        autoReportHour: settings.autoReportHour.toString(),
+        welcomeEmailEnabled: settings.welcomeEmailEnabled.toString(),
+        receiptEmailEnabled: settings.receiptEmailEnabled.toString(),
+        theme: settings.theme,
       })
       setSaved(true)
       if (onAppNameChange) onAppNameChange(settings.appName)
       log.updateSettings({
         scannerEnabled: settings.scannerEnabled,
-        matchThreshold: settings.matchThreshold,
         autoLockTimeout: settings.autoLockTimeout,
         showMemberPhotos: settings.showMemberPhotos,
         enableNotifications: settings.enableNotifications,
+        allowMultipleDailyCheckins: settings.allowMultipleDailyCheckins,
+        backupEnabled: settings.backupEnabled,
+        backupHour: settings.backupHour,
+        backupKeep: settings.backupKeep,
+        balanceBlockThreshold: settings.balanceBlockThreshold,
       })
       setTimeout(() => setSaved(false), 2000)
     } catch (error) {
@@ -199,13 +251,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   }
 
   const handleRestore = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to restore from a backup?\n\n' +
-      'This will REPLACE all current data (members, plans, check-ins, etc.) ' +
-      'with the data from the backup file. This action cannot be undone.'
-    )
-    if (!confirmed) return
-
+    setShowRestoreConfirm(false)
     setBackupBanner({ type: 'loading', message: 'Restoring from backup...' })
     try {
       const result = await window.electronAPI.restoreBackup()
@@ -260,8 +306,18 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     }
   }
 
-  const handleRestartApp = () => {
-    window.electronAPI.restartApp()
+  // Restart Now — requires a backup to be created before the update is applied
+  const handleRestartApp = async () => {
+    setUpdateStatus({ type: 'backing-up', message: 'Creating a safety backup before updating...' })
+    try {
+      const result = await window.electronAPI.restartAppWithBackup()
+      if (!result.success) {
+        setUpdateStatus({ type: 'error', message: result.message || 'Backup failed — update aborted.' })
+      }
+      // On success the app quits and installs; nothing else to do here.
+    } catch (error: any) {
+      setUpdateStatus({ type: 'error', message: `Backup failed: ${error.message}` })
+    }
   }
 
   const dismissBanner = () => setBackupBanner({ type: 'none' })
@@ -386,22 +442,6 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               </label>
             </div>
 
-            <div className="setting-item">
-              <div className="setting-info">
-                <span className="setting-label">Match Confidence Threshold</span>
-                <span className="setting-description">
-                  Minimum match score required (currently: {settings.matchThreshold}%)
-                </span>
-              </div>
-              <input
-                type="range"
-                className="range-input"
-                min="70"
-                max="100"
-                value={settings.matchThreshold}
-                onChange={(e) => setSettings({ ...settings, matchThreshold: Number(e.target.value) })}
-              />
-            </div>
           </div>
 
           {/* U.R.U. 4500 setup info */}
@@ -430,6 +470,27 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
           <div className="settings-group">
             <div className="setting-item">
               <div className="setting-info">
+                <span className="setting-label">Theme</span>
+                <span className="setting-description">Switch between dark and light appearance (P2 5.7)</span>
+              </div>
+              <div className="theme-toggle-row">
+                <button
+                  className={`btn btn-sm ${settings.theme === 'dark' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setSettings({ ...settings, theme: 'dark' })}
+                >
+                  🌙 Dark
+                </button>
+                <button
+                  className={`btn btn-sm ${settings.theme === 'light' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setSettings({ ...settings, theme: 'light' })}
+                >
+                  ☀️ Light
+                </button>
+              </div>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-info">
                 <span className="setting-label">Show Member Photos</span>
                 <span className="setting-description">Display photos on member profiles</span>
               </div>
@@ -456,6 +517,49 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 />
                 <span className="toggle-slider" />
               </label>
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h2 className="section-title">Check-ins</h2>
+          <div className="settings-group">
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Allow Multiple Daily Check-ins</span>
+                <span className="setting-description">
+                  When OFF, a member is blocked from checking in again while they are still checked in (until they check out).
+                  When ON, members can check in multiple times per day.
+                </span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.allowMultipleDailyCheckins}
+                  onChange={(e) => setSettings({ ...settings, allowMultipleDailyCheckins: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Block Check-in Over Due Balance</span>
+                <span className="setting-description">
+                  Members with an outstanding balance above this amount (₱) are blocked at the kiosk until they settle.
+                  Set to 0 to disable.
+                </span>
+              </div>
+              <input
+                type="number"
+                className="input setting-input"
+                value={settings.balanceBlockThreshold || ''}
+                onChange={(e) => setSettings({ ...settings, balanceBlockThreshold: Number(e.target.value) })}
+                placeholder="0 = disabled"
+                style={{ width: 120 }}
+                min="0"
+                step="50"
+              />
             </div>
           </div>
         </section>
@@ -563,6 +667,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                     : settings.smtpHost === 'smtp.mail.yahoo.com'
                     ? 'Use an App Password. Generate one at your Yahoo account security settings'
                     : 'SMTP password or API key'}
+                  {' '}· 🔒 Stored encrypted (Windows security)
                 </span>
               </div>
               <input
@@ -585,6 +690,78 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 onChange={(e) => setSettings({ ...settings, smtpFromEmail: e.target.value })}
                 placeholder="you@gmail.com"
               />
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Default Owner Email</span>
+                <span className="setting-description">Recipient used for the automatic end-of-day report and pre-filled when emailing reports · 🔒 Stored encrypted (Windows security)</span>
+              </div>
+              <input
+                type="email"
+                className="input setting-input"
+                value={settings.reportOwnerEmail}
+                onChange={(e) => setSettings({ ...settings, reportOwnerEmail: e.target.value })}
+                placeholder="owner@example.com"
+              />
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Auto-send Daily Report</span>
+                <span className="setting-description">Email the daily sales report to the owner at the end of each day (requires SMTP + owner email)</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.autoReportEnabled}
+                  onChange={(e) => setSettings({ ...settings, autoReportEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Welcome Email</span>
+                <span className="setting-description">Send a welcome email to new members on enrollment (requires SMTP, member email) (P2 5.5)</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.welcomeEmailEnabled}
+                  onChange={(e) => setSettings({ ...settings, welcomeEmailEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Receipt Email</span>
+                <span className="setting-description">Email a payment receipt to members after each payment (requires SMTP, member email) (P2 5.5)</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.receiptEmailEnabled}
+                  onChange={(e) => setSettings({ ...settings, receiptEmailEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Report Hour</span>
+                <span className="setting-description">Hour of day (24h) to send the automatic end-of-day report</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.autoReportHour}
+                onChange={(e) => setSettings({ ...settings, autoReportHour: Number(e.target.value) })}
+                disabled={!settings.autoReportEnabled}
+              >
+                <option value={21}>9 PM</option>
+                <option value={22}>10 PM</option>
+                <option value={23}>11 PM</option>
+                <option value={0}>12 AM</option>
+              </select>
             </div>
             <div className="setting-item">
               <div className="setting-info">
@@ -650,7 +827,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Create Backup</span>
                 <span className="setting-description">
-                  Export all data including member photos, plans, check-ins, and settings to a ZIP file
+                  Export ALL data to a ZIP file — member photos, fingerprints, plans, check-ins, payments, coaches, staff, logs & settings
                 </span>
               </div>
               <button className="btn btn-primary" onClick={handleBackup}>
@@ -664,9 +841,66 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                   Replace all current data with a previously created backup ZIP file
                 </span>
               </div>
-              <button className="btn btn-secondary restore-btn" onClick={handleRestore}>
+              <button className="btn btn-secondary restore-btn" onClick={() => setShowRestoreConfirm(true)}>
                 🔄 Restore
               </button>
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Automatic Daily Backups</span>
+                <span className="setting-description">
+                  Automatically save a backup each day at the selected hour (kept in the app's backup folder).
+                </span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.backupEnabled}
+                  onChange={(e) => setSettings({ ...settings, backupEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: 'none' }}>
+              <div className="setting-info">
+                <span className="setting-label">Backup Hour</span>
+                <span className="setting-description">Hour of day (24h) to run the automatic backup</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.backupHour}
+                onChange={(e) => setSettings({ ...settings, backupHour: Number(e.target.value) })}
+                disabled={!settings.backupEnabled}
+              >
+                <option value={23}>11 PM</option>
+                <option value={0}>12 AM</option>
+                <option value={1}>1 AM</option>
+                <option value={2}>2 AM</option>
+                <option value={3}>3 AM</option>
+                <option value={4}>4 AM</option>
+                <option value={5}>5 AM</option>
+                <option value={6}>6 AM</option>
+                <option value={12}>12 PM</option>
+                <option value={18}>6 PM</option>
+                <option value={21}>9 PM</option>
+              </select>
+            </div>
+            <div className="setting-item" style={{ borderBottom: 'none' }}>
+              <div className="setting-info">
+                <span className="setting-label">Keep Backups</span>
+                <span className="setting-description">Number of automatic backups to keep before pruning</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.backupKeep}
+                onChange={(e) => setSettings({ ...settings, backupKeep: Number(e.target.value) })}
+                disabled={!settings.backupEnabled}
+              >
+                <option value={3}>3</option>
+                <option value={7}>7</option>
+                <option value={14}>14</option>
+                <option value={30}>30</option>
+              </select>
             </div>
           </div>
 
@@ -728,6 +962,13 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                   <button className="btn btn-primary btn-sm" onClick={handleRestartApp}>
                     🔄 Restart Now
                   </button>
+                  <span className="update-status-hint">A backup is created automatically before the update applies.</span>
+                </div>
+              )}
+              {updateStatus.type === 'backing-up' && (
+                <div className="update-status backing-up">
+                  <div className="update-spinner" />
+                  <span>{updateStatus.message}</span>
                 </div>
               )}
               {updateStatus.type === 'up-to-date' && (
@@ -748,6 +989,19 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
             </div>
           </div>
         </section>
+
+      {/* P2 5.7: destructive-action confirmation */}
+      <ConfirmModal
+        open={showRestoreConfirm}
+        title="Restore from Backup"
+        message="This will REPLACE all current data (members, plans, check-ins, payments, etc.) with the data from the backup file. This action cannot be undone. A safety backup is created automatically first."
+        confirmLabel="Restore"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        icon="🔄"
+        onConfirm={handleRestore}
+        onCancel={() => setShowRestoreConfirm(false)}
+      />
 
         <div className="settings-actions">
           {saved && <span className="save-success">✓ Settings saved!</span>}

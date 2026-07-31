@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react'
 import './Plans.css'
 import { Plan, StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
+import ConfirmModal from './ConfirmModal'
 
 function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const isAdmin = currentUser?.role === 'admin'
   const [plans, setPlans] = useState<Plan[]>([])
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
   const [formData, setFormData] = useState({
     name: '',
     type: 'monthly' as 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family',
@@ -64,17 +66,16 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   }
 
   const handleDelete = async (id: number) => {
-    if (confirm('Are you sure you want to delete this plan?')) {
-      try {
-        const plan = plans.find(p => p.id === id)
-        await window.electronAPI.deletePlan(id)
-        loadPlans()
-        if (plan) {
-          log.deletePlan(id, plan.name)
-        }
-      } catch (error) {
-        console.error('Failed to delete plan:', error)
+    try {
+      const plan = plans.find(p => p.id === id)
+      await window.electronAPI.deletePlan(id)
+      setDeleteTarget(null)
+      loadPlans()
+      if (plan) {
+        log.deletePlan(id, plan.name)
       }
+    } catch (error) {
+      console.error('Failed to delete plan:', error)
     }
   }
 
@@ -134,7 +135,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     className="btn-icon danger"
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleDelete(plan.id)
+                      setDeleteTarget(plan)
                     }}
                     title="Delete"
                   >
@@ -156,6 +157,18 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
           ))
         )}
       </div>
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Delete Plan"
+        message={`Are you sure you want to delete the plan "${deleteTarget?.name || ''}"? Members assigned to it will have no plan.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        icon="🗑️"
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget.id)}
+        onCancel={() => setDeleteTarget(null)}
+      />
 
       {showForm && (
         <div className="modal-overlay">

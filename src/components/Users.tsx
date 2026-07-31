@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react'
 import './Users.css'
 import { StaffUser } from '../types/electron'
+import ConfirmModal from './ConfirmModal'
 
 function Users() {
   const [users, setUsers] = useState<StaffUser[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingUser, setEditingUser] = useState<StaffUser | null>(null)
-  const [form, setForm] = useState({ username: '', password: '', role: 'staff' as 'admin' | 'staff', display_name: '', photo: '' })
+  const [deleteTarget, setDeleteTarget] = useState<StaffUser | null>(null)
+  const [form, setForm] = useState({ username: '', password: '', confirm_password: '', role: 'staff' as 'admin' | 'staff', display_name: '', photo: '' })
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -27,14 +29,14 @@ function Users() {
 
   const openCreate = () => {
     setEditingUser(null)
-    setForm({ username: '', password: '', role: 'staff', display_name: '', photo: '' })
+    setForm({ username: '', password: '', confirm_password: '', role: 'staff', display_name: '', photo: '' })
     setFormError('')
     setShowModal(true)
   }
 
   const openEdit = (user: StaffUser) => {
     setEditingUser(user)
-    setForm({ username: user.username, password: '', role: user.role, display_name: user.display_name || '', photo: user.photo || '' })
+    setForm({ username: user.username, password: '', confirm_password: '', role: user.role, display_name: user.display_name || '', photo: user.photo || '' })
     setFormError('')
     setShowModal(true)
   }
@@ -66,6 +68,10 @@ function Users() {
     }
     if (!editingUser && !form.password.trim()) {
       setFormError('Password is required for new users')
+      return
+    }
+    if (form.password !== form.confirm_password) {
+      setFormError('Passwords do not match')
       return
     }
 
@@ -110,7 +116,7 @@ function Users() {
   }
 
   const handleDelete = async (user: StaffUser) => {
-    if (!confirm(`Are you sure you want to delete user "${user.username}"?`)) return
+    setDeleteTarget(null)
     try {
       const result = await window.electronAPI.deleteUser(user.id)
       if (result.success) {
@@ -168,7 +174,7 @@ function Users() {
                     <td>
                       <div className="user-actions">
                         <button className="btn btn-sm btn-secondary" onClick={() => openEdit(u)}>Edit</button>
-                        <button className="btn btn-sm btn-danger" onClick={() => handleDelete(u)}>Delete</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget(u)}>Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -178,6 +184,19 @@ function Users() {
           </table>
         </div>
       )}
+
+      {/* P2 5.7: destructive-action confirmation */}
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Delete User"
+        message={`Are you sure you want to delete the user "${deleteTarget?.username || ''}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        icon="🗑️"
+        onConfirm={() => deleteTarget && handleDelete(deleteTarget)}
+        onCancel={() => setDeleteTarget(null)}
+      />
 
       {/* ── User Modal ── */}
       {showModal && (
@@ -229,6 +248,17 @@ function Users() {
                   <label>{editingUser ? 'New Password (leave blank to keep)' : 'Password *'}</label>
                   <input type="password" className="input" placeholder={editingUser ? 'Leave blank to keep current' : 'Password'}
                     value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} />
+                </div>
+                <div className="user-form-field">
+                  <label>{editingUser ? 'Confirm New Password' : 'Confirm Password *'}</label>
+                  <input type="password"
+                    className={`input ${form.password !== form.confirm_password ? 'mismatch' : ''}`}
+                    placeholder={editingUser ? 'Re-enter new password' : 'Confirm password'}
+                    value={form.confirm_password}
+                    onChange={e => setForm(p => ({ ...p, confirm_password: e.target.value }))} />
+                  {form.password !== form.confirm_password && (
+                    <span className="user-form-hint error">⚠️ Passwords do not match</span>
+                  )}
                 </div>
                 <div className="user-form-field">
                   <label>Role</label>

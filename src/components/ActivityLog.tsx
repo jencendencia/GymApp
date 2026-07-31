@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import './ActivityLog.css'
 import { ActivityLog as ActivityLogType } from '../types/electron'
+import { todayLocal, todayLocalOf } from '../lib/dates'
 
 type ActionFilter = 'all' | 'checkin' | 'member' | 'coach' | 'plan' | 'settings'
 
@@ -43,22 +44,39 @@ function ActivityLog() {
   const [filter, setFilter] = useState<ActionFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDate, setSelectedDate] = useState('')
+  const [userFilter, setUserFilter] = useState('all')
+  // P1 4.2: pagination state
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(true)
+  const PAGE_SIZE = 100
 
   useEffect(() => {
     loadLogs()
-  }, [])
+  }, [userFilter])
 
-  const loadLogs = async () => {
-    setLoading(true)
+  const loadLogs = async (append = false) => {
+    setLoading(!append)
     try {
-      const data = await window.electronAPI.getActivityLogs(200)
-      setLogs(data)
+      const nextOffset = append ? offset + PAGE_SIZE : 0
+      const data = await window.electronAPI.getActivityLogs({ limit: PAGE_SIZE, user: userFilter, offset: nextOffset })
+      setLogs(prev => append ? [...prev, ...data] : data)
+      setOffset(nextOffset)
+      setHasMore(data.length === PAGE_SIZE)
     } catch (error) {
       console.error('Failed to load activity logs:', error)
     } finally {
       setLoading(false)
     }
   }
+
+  const loadMore = () => loadLogs(true)
+
+  // Distinct users seen in the current log batch (for the user filter)
+  const users = useMemo(() => {
+    const set = new Set<string>()
+    logs.forEach(l => { if (l.user) set.add(l.user) })
+    return Array.from(set).sort()
+  }, [logs])
 
   // Group logs by date for timeline display
   const groupedLogs = useMemo(() => {
@@ -86,7 +104,7 @@ function ActivityLog() {
     // Filter by date
     if (selectedDate) {
       filtered = filtered.filter(log => {
-        const logDate = new Date(log.created_at.replace(' ', 'T') + 'Z').toISOString().split('T')[0]
+        const logDate = todayLocalOf(new Date(log.created_at.replace(' ', 'T')))
         return logDate === selectedDate
       })
     }
@@ -129,7 +147,8 @@ function ActivityLog() {
     }
   }
 
-  const parseDetails = (details?: string) => {
+  // Function declaration (hoisted) so the groupedLogs useMemo below can call it safely
+  function parseDetails(details?: string) {
     if (!details) return null
     try {
       return JSON.parse(details)
@@ -174,7 +193,7 @@ function ActivityLog() {
 
   // (getDateGroups removed — use Object.entries(groupedLogs) directly)
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayLocal()
 
   return (
     <div className="activitylog-page">
@@ -195,7 +214,18 @@ function ActivityLog() {
             max={today}
             onChange={(e) => setSelectedDate(e.target.value)}
           />
-          <button className="btn btn-secondary" onClick={loadLogs} title="Refresh logs">
+          <select
+            className="input date-input"
+            value={userFilter}
+            onChange={(e) => setUserFilter(e.target.value)}
+            title="Filter by user"
+          >
+            <option value="all">All users</option>
+            {users.map(u => (
+              <option key={u} value={u}>{u}</option>
+            ))}
+          </select>
+          <button className="btn btn-secondary" onClick={() => loadLogs()} title="Refresh logs">
             ⟳
           </button>
         </div>
@@ -307,6 +337,15 @@ function ActivityLog() {
           </div>
         )}
       </div>
+
+      {/* P1 4.2: load-more pagination */}
+      {!loading && hasMore && (
+        <div className="activitylog-load-more">
+          <button className="btn btn-secondary" onClick={loadMore}>
+            Load more logs
+          </button>
+        </div>
+      )}
     </div>
   )
 }

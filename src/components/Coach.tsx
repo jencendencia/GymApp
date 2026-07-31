@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react'
 import './Coach.css'
 import { Coach as CoachType, Member, CoachFeePayment } from '../types/electron'
 import { log } from '../lib/logger'
+import { todayLocal, todayLocalOf } from '../lib/dates'
+import ConfirmModal from './ConfirmModal'
 
 function Coach() {
   const [activeTab, setActiveTab] = useState<'registration' | 'members' | 'payments'>('registration')
   const [coaches, setCoaches] = useState<CoachType[]>([])
   const [selectedCoach, setSelectedCoach] = useState<CoachType | null>(null)
   const [showCoachForm, setShowCoachForm] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CoachType | null>(null)
   const [coachMembers, setCoachMembers] = useState<Member[]>([])
   const [selectedCoachForMembers, setSelectedCoachForMembers] = useState<number | null>(null)
 
@@ -19,7 +22,7 @@ function Coach() {
   const [enrollMember, setEnrollMember] = useState<Member | null>(null)
   const [enrollForm, setEnrollForm] = useState({
     coach_id: 0,
-    coaching_start: new Date().toISOString().split('T')[0],
+    coaching_start: todayLocal(),
     coaching_end: '',
     record_payment: false,
     payment_amount: '',
@@ -135,27 +138,26 @@ function Coach() {
   }
 
   const handleDeleteCoach = async (id: number) => {
-    if (confirm('Are you sure you want to delete this coach? Members assigned to this coach will be unassigned.')) {
-      try {
-        const coach = coaches.find(c => c.id === id)
-        await window.electronAPI.deleteCoach(id)
-        if (selectedCoachForMembers === id) {
-          setSelectedCoachForMembers(null)
-          setCoachMembers([])
-        }
-        loadCoaches()
-        if (coach) {
-          log.deleteCoach(id, coach.name)
-        }
-      } catch (error) {
-        console.error('Failed to delete coach:', error)
+    try {
+      const coach = coaches.find(c => c.id === id)
+      await window.electronAPI.deleteCoach(id)
+      setDeleteTarget(null)
+      if (selectedCoachForMembers === id) {
+        setSelectedCoachForMembers(null)
+        setCoachMembers([])
       }
+      loadCoaches()
+      if (coach) {
+        log.deleteCoach(id, coach.name)
+      }
+    } catch (error) {
+      console.error('Failed to delete coach:', error)
     }
   }
 
   // Payment Tracking state
   const [trackingCoachId, setTrackingCoachId] = useState<number>(0)
-  const [trackingDate, setTrackingDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [trackingDate, setTrackingDate] = useState(() => todayLocal())
   const [dailyPayments, setDailyPayments] = useState<CoachFeePayment[]>([])
   const [dailyTotal, setDailyTotal] = useState(0)
   const [monthlyPayments, setMonthlyPayments] = useState<CoachFeePayment[]>([])
@@ -242,7 +244,7 @@ const handleRecordFeePayment = async () => {
     const addOneMonth = (dateStr: string): string => {
     const date = new Date(dateStr + 'T12:00:00')
     date.setMonth(date.getMonth() + 1)
-    return date.toISOString().split('T')[0]
+    return todayLocalOf(date)
   }
 
   const handleEnrollToCoach = async () => {
@@ -298,7 +300,7 @@ const handleRecordFeePayment = async () => {
       setEnrollMember(null)
       setEnrollForm({
         coach_id: 0,
-        coaching_start: new Date().toISOString().split('T')[0],
+        coaching_start: todayLocal(),
         coaching_end: '',
         record_payment: false,
         payment_amount: '',
@@ -318,7 +320,7 @@ const handleRecordFeePayment = async () => {
   }
 
   const openEnrollModal = (member: Member) => {
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayLocal()
     setEnrollMember(member)
     setEnrollForm({
       coach_id: 0,
@@ -418,7 +420,7 @@ const handleRecordFeePayment = async () => {
                             </button>
                             <button
                               className="btn-icon danger"
-                              onClick={() => handleDeleteCoach(coach.id)}
+                              onClick={() => setDeleteTarget(coach)}
                               title="Delete"
                             >
                               ✕
@@ -646,6 +648,19 @@ const handleRecordFeePayment = async () => {
           )}
         </div>
       )}
+
+      {/* P2 5.7: destructive-action confirmation */}
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Delete Coach"
+        message={`Are you sure you want to delete the coach "${deleteTarget?.name || ''}"? Members assigned to this coach will be unassigned.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        icon="🗑️"
+        onConfirm={() => deleteTarget && handleDeleteCoach(deleteTarget.id)}
+        onCancel={() => setDeleteTarget(null)}
+      />
 
       {/* Coach Registration/Edit Modal */}
       {showCoachForm && (

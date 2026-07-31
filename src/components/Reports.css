@@ -12,6 +12,29 @@
 }
 
 /* ── Topbar ── */
+.reports-reminder-banner {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.reports-reminder-banner.success {
+  background: rgba(88, 204, 124, 0.12);
+  border: 1px solid rgba(88, 204, 124, 0.35);
+  color: var(--accent);
+}
+
+.reports-reminder-banner.error {
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.35);
+  color: var(--danger);
+}
+
+.td-receipt {
+  width: 48px;
+}
+
 .reports-topbar {
   display: flex;
   align-items: center;
@@ -325,59 +348,6 @@
   color: var(--text-muted, #9aa0a6);
   min-width: 44px;
   text-align: right;
-}
-
-/* ── Trend Chart (monthly) ── */
-.trend-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  height: 160px;
-  padding: 8px 0;
-}
-
-.trend-bar-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-}
-
-.trend-bar-val {
-  font-size: 10px;
-  color: var(--text-muted, #9aa0a6);
-  text-align: center;
-  writing-mode: vertical-lr;
-  transform: rotate(180deg);
-  max-height: 40px;
-  overflow: hidden;
-}
-
-.trend-bar-track {
-  flex: 1;
-  width: 100%;
-  max-width: 48px;
-  background: var(--surface-2, #1a1d23);
-  border-radius: 4px 4px 0 0;
-  display: flex;
-  align-items: flex-end;
-  overflow: hidden;
-}
-
-.trend-bar-fill {
-  width: 100%;
-  background: linear-gradient(180deg, var(--accent, #c6ff3d), rgba(198, 255, 61, 0.4));
-  border-radius: 4px 4px 0 0;
-  transition: height 0.4s ease;
-  min-height: 2px;
-}
-
-.trend-bar-label {
-  font-size: 10px;
-  color: var(--text-faint, #5f6368);
-  font-weight: 500;
 }
 
 /* ── Panel divider + meta ── */
@@ -794,5 +764,63 @@
     flex-direction: column;
     gap: 12px;
     align-items: flex-start;
+  }
+}
+
+/* ── Revenue line chart (weekly trend) ── */
+.trend-line-chart {
+  width: 100%;
+  padding: 6px 0 0;
+}
+
+.trend-line-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.trend-line-chart .line-grid {
+  stroke: var(--border, #2a2d35);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.trend-line-chart .line-grid-label {
+  fill: var(--text-faint, #5f6368);
+  font-size: 9px;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.trend-line-chart .line-area {
+  fill: url(#lineAreaGrad);
+}
+
+.trend-line-chart .line-stroke {
+  stroke: var(--accent, #c6ff3d);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trend-line-chart .line-dot {
+  fill: var(--surface, #1a1d23);
+  stroke: var(--accent, #c6ff3d);
+  stroke-width: 2;
+}
+
+.trend-line-chart .line-x-label {
+  fill: var(--text-muted, #9aa0a6);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .trend-line-svg {
+    min-width: 420px;
+  }
+
+  .trend-line-chart {
+    overflow-x: auto;
   }
 }

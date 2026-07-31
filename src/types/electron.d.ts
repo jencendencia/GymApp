@@ -3,6 +3,7 @@ export interface ElectronAPI {
   minimizeWindow: () => Promise<void>
   maximizeWindow: () => Promise<void>
   closeWindow: () => Promise<void>
+  printIdCard: (html: string) => Promise<{ success: boolean; message?: string }>
 
   // Members
   getMembers: () => Promise<Member[]>
@@ -11,7 +12,9 @@ export interface ElectronAPI {
   updateMember: (id: number, member: UpdateMemberInput) => Promise<any>
   deleteMember: (id: number) => Promise<any>
   searchMembers: (query: string) => Promise<Member[]>
+  getMembersPage: (opts?: { offset?: number; limit?: number; search?: string }) => Promise<{ rows: Member[]; total: number; offset: number; limit: number }>
   checkMemberIdExists: (memberId: string) => Promise<{ id: number; name: string } | null>
+  getLastMemberId: () => Promise<{ last: number; next: number }>
 
   // Plans
   getPlans: () => Promise<Plan[]>
@@ -20,10 +23,16 @@ export interface ElectronAPI {
   deletePlan: (id: number) => Promise<any>
 
   // Check-ins
-  getCheckins: (date?: string) => Promise<Checkin[]>
-  createCheckin: (checkin: CreateCheckinInput) => Promise<any>
+  getCheckins: (date?: string, opts?: { offset?: number; limit?: number }) => Promise<Checkin[]>
+  getCheckinsCount: (date?: string) => Promise<number>
+  createCheckin: (checkin: CreateCheckinInput) => Promise<{ success: boolean; reason?: string; message?: string; id?: number }>
   getActiveCheckins: () => Promise<ActiveCheckin[]>
   checkoutMember: (checkinId: number) => Promise<{ success: boolean }>
+
+  // Guest / trial check-ins
+  createGuestCheckin: (guest: { name: string; phone?: string; type?: string }) => Promise<any>
+  getGuestCheckins: (date?: string) => Promise<GuestCheckin[]>
+  getGuestCheckinsCount: (date?: string) => Promise<number>
 
   // Stats
   getTodayStats: () => Promise<TodayStats>
@@ -33,11 +42,13 @@ export interface ElectronAPI {
   saveFingerprint: (memberId: number, template: Buffer, quality: number) => Promise<any>
   saveFingerprintCredential: (memberId: string, credentialId: string) => Promise<any>
   getFingerprint: (memberId: number) => Promise<any>
-  matchFingerprint: (template: Buffer) => Promise<{ matched: boolean; memberId: number | null; confidence: number }>
 
   // Payments
-  getPayments: (memberId?: number) => Promise<Payment[]>
+  getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => Promise<Payment[]>
+  getPaymentsCount: (memberId?: number) => Promise<number>
   createPayment: (payment: CreatePaymentInput) => Promise<any>
+  updatePaymentStatus: (id: number, status: 'completed' | 'refunded' | 'voided', note?: string) =>
+    Promise<{ success: boolean; message?: string }>
 
   // Coaches
   getCoaches: () => Promise<Coach[]>
@@ -60,13 +71,21 @@ export interface ElectronAPI {
   // Reports
   getDailyReport: (date: string) => Promise<DailyReport>
   getMonthlyReport: (yearMonth: string) => Promise<MonthlyReport>
+  getAtRiskMembers: () => Promise<AtRiskMember[]>
+  sendRenewalReminders: () => Promise<{
+    success: boolean
+    message?: string
+    sent: number
+    skipped: number
+    results: { member_id: number; name: string; sent: boolean; message: string }[]
+  }>
   sendReportEmail: (data: { html: string; recipient: string; appName: string; filename: string }) =>
     Promise<{ success: boolean; filePath?: string; message?: string }>
   testSmtp: () => Promise<{ success: boolean; message: string }>
 
   // Activity Logs
   createActivityLog: (log: CreateActivityLogInput) => Promise<any>
-  getActivityLogs: (limit?: number) => Promise<ActivityLog[]>
+  getActivityLogs: (opts?: { limit?: number; user?: string; action?: string; offset?: number }) => Promise<ActivityLog[]>
 
   // Backup & Restore
   createBackup: () => Promise<{ success: boolean; path?: string; reason?: string }>
@@ -89,6 +108,10 @@ export interface ElectronAPI {
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
 
+  // Theme
+  getTheme: () => Promise<string | null>
+  saveTheme: (theme: string) => Promise<void>
+
   // License Activation
   validateLicense: (key: string) => Promise<{ valid: boolean; message: string }>
   getLicenseInfo: () => Promise<{ activated: boolean; machineId: string | null; storedMachineId: string | null }>
@@ -96,6 +119,7 @@ export interface ElectronAPI {
   // Auto-update
   checkForUpdates: () => Promise<{ status: string; message?: string }>
   restartApp: () => Promise<void>
+  restartAppWithBackup: () => Promise<{ success: boolean; path?: string; message?: string }>
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
 }
 
@@ -142,6 +166,8 @@ export interface Member {
   waiver_agreed_at?: string
   plan_name?: string
   coach_name?: string
+  plan_type?: string
+  plan_sessions?: number
 }
 
 export interface CreateMemberInput {
@@ -184,6 +210,7 @@ export interface UpdateMemberInput {
   balance?: number
   status?: 'active' | 'inactive' | 'expired'
   waiver_agreed_at?: string
+  sessions_used?: number
 }
 
 export interface Plan {
@@ -243,7 +270,10 @@ export interface Payment {
   type: 'new_plan' | 'renewal' | 'top_up'
   plan_id?: number
   payment_method?: string
+  transaction_ref?: string
   staff_id?: number
+  status?: 'completed' | 'refunded' | 'voided'
+  note?: string
   created_at: string
   name?: string
   member_name?: string
@@ -257,6 +287,7 @@ export interface CreatePaymentInput {
   type: 'new_plan' | 'renewal' | 'top_up'
   plan_id?: number
   payment_method?: string
+  transaction_ref?: string
   staff_id?: number
 }
 
@@ -312,6 +343,14 @@ export interface CreateCoachFeePaymentInput {
   member_id: number
   amount: number
   notes?: string
+}
+
+export interface GuestCheckin {
+  id: number
+  name: string
+  phone?: string
+  type: 'guest' | 'trial'
+  created_at: string
 }
 
 export interface ActivityLog {
@@ -374,6 +413,19 @@ export interface TodayStats {
   activeMembers: number
   expiredMembers: number
   expiringThisWeek: number
+}
+
+export interface AtRiskMember {
+  id: number
+  member_id: string
+  name: string
+  email?: string | null
+  plan_name?: string | null
+  plan_end?: string | null
+  checkins_recent: number
+  checkins_prev: number
+  drop_pct: number
+  days_since_last_checkin: number | null
 }
 
 declare global {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './Dashboard.css'
-import { ActiveCheckin, TodayStats, Member } from '../types/electron'
+import { ActiveCheckin, TodayStats, Member, AtRiskMember } from '../types/electron'
 
 interface DashboardProps {
   stats: TodayStats
@@ -11,6 +11,7 @@ interface DashboardProps {
 
 function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: DashboardProps) {
   const [activeCheckins, setActiveCheckins] = useState<ActiveCheckin[]>([])
+  const [atRiskMembers, setAtRiskMembers] = useState<AtRiskMember[]>([])
   const [showCheckinModal, setShowCheckinModal] = useState(false)
   const [checkingOut, setCheckingOut] = useState<number | null>(null)
 
@@ -23,9 +24,19 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
     }
   }, [])
 
+  const loadAtRisk = useCallback(async () => {
+    try {
+      const data = await window.electronAPI.getAtRiskMembers()
+      setAtRiskMembers(data)
+    } catch (error) {
+      console.error('Failed to load at-risk members:', error)
+    }
+  }, [])
+
   useEffect(() => {
     loadActiveCheckins()
-  }, [loadActiveCheckins])
+    loadAtRisk()
+  }, [loadActiveCheckins, loadAtRisk])
 
   const handleCheckout = async (checkin: ActiveCheckin) => {
     setCheckingOut(checkin.id)
@@ -205,6 +216,43 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
                     <span className="dash-active-dot" />
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* At-Risk Members */}
+        <div className="dash-panel">
+          <div className="dash-panel-header">
+            <h3 className="dash-panel-title">At-Risk Members</h3>
+            <button className="dash-panel-link" onClick={loadAtRisk} title="Refresh at-risk list">
+              ↻ Refresh
+            </button>
+          </div>
+          <div className="dash-panel-body">
+            {atRiskMembers.length === 0 ? (
+              <div className="dash-panel-empty">
+                <p>No at-risk members — everyone is showing up!</p>
+              </div>
+            ) : (
+              <div className="dash-atrisk-list">
+                {atRiskMembers.slice(0, 6).map((m) => {
+                  const reason = m.days_since_last_checkin != null && m.days_since_last_checkin >= 14
+                    ? `No check-in in ${m.days_since_last_checkin}d`
+                    : `${m.checkins_prev} → ${m.checkins_recent} check-ins (${m.drop_pct}% drop)`
+                  return (
+                    <div key={m.id} className="dash-atrisk-item">
+                      <div className="dash-atrisk-avatar">{m.name.charAt(0).toUpperCase()}</div>
+                      <div className="dash-atrisk-info">
+                        <span className="dash-atrisk-name">{m.name}</span>
+                        <span className="dash-atrisk-plan">{m.plan_name || 'No plan'}</span>
+                      </div>
+                      <span className="dash-atrisk-reason" title={reason}>
+                        {reason}
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

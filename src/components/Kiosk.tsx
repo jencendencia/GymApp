@@ -1,18 +1,33 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './Kiosk.css'
-import { Member, TodayStats } from '../types/electron'
+import jsQR from 'jsqr'
+import { Member, TodayStats, Plan } from '../types/electron'
 import { log } from '../lib/logger'
+import { todayLocalOf } from '../lib/dates'
 
 interface KioskProps {
   onRefresh: () => void
 }
 
-type KioskState = 'idle' | 'scanning' | 'match-found' | 'no-match' | 'expired'
+type KioskState = 'idle' | 'scanning' | 'match-found' | 'no-match' | 'expired' | 'blocked'
 
 // WebAuthn Relying Party ID - must match registration
 const RP_ID = 'localhost'
 const AUTO_SCAN_DELAY = 600 // ms delay before auto-scanning
 const AUTO_CLOSE_SECONDS = 10
+
+// Payment methods that require a transaction reference number
+const METHODS_REQUIRING_REF = ['card', 'gcash', 'maya', 'bank_transfer']
+
+// Promo / tip messages rotated on the idle screen (P2 5.1)
+const PROMOS = [
+  { icon: '💪', text: 'Every rep counts — you got this!' },
+  { icon: '🏆', text: 'Consistency beats intensity. See you every day!' },
+  { icon: '💧', text: 'Stay hydrated during your workout.' },
+  { icon: '⏰', text: 'New to the gym? Ask the front desk for a tour.' },
+  { icon: '📣', text: 'Refer a friend and earn rewards!' },
+  { icon: '🧘', text: 'Don\'t forget to stretch after your session.' },
+]
 
 // Check if this is running in the dedicated kiosk window
 const isKioskWindow = () => {
@@ -35,27 +50,166 @@ function Kiosk({ onRefresh }: KioskProps) {
   const [memberIdInput, setMemberIdInput] = useState('')
   const [memberIdError, setMemberIdError] = useState('')
   const [memberIdLoading, setMemberIdLoading] = useState(false)
+  const [blockedMessage, setBlockedMessage] = useState('')
+  // Renewal modal state
+  const [showRenewModal, setShowRenewModal] = useState(false)
+  const [renewPlans, setRenewPlans] = useState<Plan[]>([])
+  const [renewPlanId, setRenewPlanId] = useState(0)
+  const [renewPaymentMethod, setRenewPaymentMethod] = useState('cash')
+  const [renewTxnRef, setRenewTxnRef] = useState('')
+  const [renewAmount, setRenewAmount] = useState(0)
+  const [renewing, setRenewing] = useState(false)
+  const [renewError, setRenewError] = useState('')
+  // Kiosk settings wired from Settings page
+  const [kioskSettings, setKioskSettings] = useState({
+    scannerEnabled: true,
+    showMemberPhotos: true,
+    enableNotifications: true,
+    autoLockTimeout: 0,
+  })
+  // QR code scanning state
+  const [showQrScanner, setShowQrScanner] = useState(false)
+  const [qrError, setQrError] = useState('')
+  const [qrScanning, setQrScanning] = useState(false)
+  // Guest / trial check-in state (P2 5.1)
+  const [showGuestModal, setShowGuestModal] = useState(false)
+  const [guestForm, setGuestForm] = useState({ name: '', phone: '', type: 'guest' as 'guest' | 'trial' })
+  const [guestSubmitting, setGuestSubmitting] = useState(false)
+  const [guestSuccess, setGuestSuccess] = useState(false)
+  const [guestCount, setGuestCount] = useState(0)
+  // Idle promo slideshow (P2 5.1)
+  const [promoIndex, setPromoIndex] = useState(0)
+  const [promoInterval, setPromoInterval] = useState<ReturnType<typeof setInterval> | null>(null)
+  const qrVideoRef = useRef<HTMLVideoElement>(null)
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null)
+  const qrStreamRef = useRef<MediaStream | null>(null)
+  const qrFrameRef = useRef<number>(0)
   const memberIdInputRef = useRef<HTMLInputElement>(null)
   const autoScanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const isScanning = useRef(false)
   const stateRef = useRef(state)
 
-  // Load kiosk logo from settings
+  // Load kiosk logo + settings from the Settings page
   useEffect(() => {
-    const loadLogo = async () => {
+    const loadKioskConfig = async () => {
       try {
         const logo = await window.electronAPI.getSetting('kioskLogo')
         if (logo) setKioskLogo(logo)
       } catch {}
+      try {
+        const data = await window.electronAPI.getSettings()
+        setKioskSettings({
+          scannerEnabled: data.scannerEnabled !== 'false',
+          showMemberPhotos: data.showMemberPhotos !== 'false',
+          enableNotifications: data.enableNotifications === 'true',
+          autoLockTimeout: Number(data.autoLockTimeout) || 0,
+        })
+      } catch {}
     }
-    loadLogo()
+    loadKioskConfig()
   }, [])
 
   // Keep stateRef in sync
   useEffect(() => {
     stateRef.current = state
   }, [state])
+
+  // Cleanup camera stream when the QR scanner closes/unmounts
+  useEffect(() => {
+    return () => {
+      if (qrStreamRef.current) {
+        qrStreamRef.current.getTracks().forEach(t => t.stop())
+        qrStreamRef.current = null
+      }
+      cancelAnimationFrame(qrFrameRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!showQrScanner) {
+      if (qrStreamRef.current) {
+        qrStreamRef.current.getTracks().forEach(t => t.stop())
+        qrStreamRef.current = null
+      }
+      cancelAnimationFrame(qrFrameRef.current)
+    }
+  }, [showQrScanner])
+
+  // Load today's guest count for display (P2 5.1)
+  useEffect(() => {
+    (async () => {
+      try {
+        const count = await window.electronAPI.getGuestCheckinsCount()
+        setGuestCount(count)
+      } catch {}
+    })()
+  }, [state === 'match-found'])
+
+  // Promo slideshow rotation on the idle screen (P2 5.1)
+  useEffect(() => {
+    if (state !== 'idle') return
+    if (promoInterval) clearInterval(promoInterval)
+    const t = setInterval(() => {
+      setPromoIndex(prev => (prev + 1) % PROMOS.length)
+    }, 7000)
+    setPromoInterval(t)
+    return () => clearInterval(t)
+  }, [state])
+
+  // Play a short success chime when a member checks in (P2 5.1)
+  const playSuccessSound = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+      const ctx = new AudioCtx()
+      const notes = [523.25, 659.25, 783.99] // C5 E5 G5 major chord arpeggio
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const start = ctx.currentTime + i * 0.12
+        gain.gain.setValueAtTime(0.0001, start)
+        gain.gain.exponentialRampToValueAtTime(0.18, start + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.5)
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(start)
+        osc.stop(start + 0.55)
+      })
+      setTimeout(() => ctx.close(), 1500)
+    } catch {
+      // Audio unavailable — ignore
+    }
+  }, [])
+
+  // Track last user activity for the kiosk auto-lock (autoLockTimeout setting)
+  const lastActivityRef = useRef(Date.now())
+  useEffect(() => {
+    const recordActivity = () => { lastActivityRef.current = Date.now() }
+    window.addEventListener('pointerdown', recordActivity)
+    window.addEventListener('keydown', recordActivity)
+    return () => {
+      window.removeEventListener('pointerdown', recordActivity)
+      window.removeEventListener('keydown', recordActivity)
+    }
+  }, [])
+
+  // Auto-lock: return to idle after autoLockTimeout minutes without activity
+  useEffect(() => {
+    const timeoutMinutes = kioskSettings.autoLockTimeout
+    if (!timeoutMinutes || timeoutMinutes <= 0) return
+    const checkTimer = setInterval(() => {
+      const idleMs = Date.now() - lastActivityRef.current
+      if (idleMs >= timeoutMinutes * 60 * 1000) {
+        if (stateRef.current !== 'idle' && !showRenewModal) {
+          resetToIdle()
+        }
+        lastActivityRef.current = Date.now()
+      }
+    }, 15000)
+    return () => clearInterval(checkTimer)
+  }, [kioskSettings.autoLockTimeout, showRenewModal])
 
   // Auto-focus member ID input when shown
   useEffect(() => {
@@ -64,8 +218,9 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
   }, [showMemberIdInput])
 
-  // Auto-scan in any state (except when manual search is open)
+  // Auto-scan in any state (except when manual search is open, scanner is disabled, or check-in was blocked)
   useEffect(() => {
+    if (!kioskSettings.scannerEnabled || state === 'blocked') return
     if (!showManualSearch) {
       autoScanTimer.current = setTimeout(() => {
         handleRealScan()
@@ -77,7 +232,7 @@ function Kiosk({ onRefresh }: KioskProps) {
         autoScanTimer.current = null
       }
     }
-  }, [state, showManualSearch, matchKey])
+  }, [state, showManualSearch, matchKey, kioskSettings.scannerEnabled])
 
   // Countdown timer for match-found auto-close
   useEffect(() => {
@@ -184,21 +339,27 @@ function Kiosk({ onRefresh }: KioskProps) {
           if (member.status === 'expired') {
             setState('expired')
           } else {
-            // If we were already on match-found, bump matchKey to reset countdown
-            if (stateRef.current === 'match-found') {
-              setMatchKey(prev => prev + 1)
-            }
-            setState('match-found')
-            
-            // Log the check-in
-            await window.electronAPI.createCheckin({
+            // Log the check-in — may be blocked by session-pack or duplicate-check-in rules
+            const result = await window.electronAPI.createCheckin({
               member_id: member.id,
               method: 'fingerprint',
               match_confidence: 1.0,
               status: 'success'
             })
-            log.checkinFingerprint(member.id, member.name)
-            onRefresh()
+            if (result && result.success === false) {
+              setBlockedMessage(result.message || 'Check-in not allowed.')
+              setState('blocked')
+            } else {
+              // If we were already on match-found, bump matchKey to reset countdown
+              if (stateRef.current === 'match-found') {
+                setMatchKey(prev => prev + 1)
+              }
+              setState('match-found')
+              playSuccessSound()
+              log.checkinFingerprint(member.id, member.name)
+              notifyCheckin(member)
+              onRefresh()
+            }
           }
         } else {
           // Credential matched but member not found — go to idle
@@ -235,15 +396,22 @@ function Kiosk({ onRefresh }: KioskProps) {
         if (member.status === 'expired') {
           setState('expired')
         } else {
-          setState('match-found')
-          await window.electronAPI.createCheckin({
+          const result = await window.electronAPI.createCheckin({
             member_id: member.id,
             method: 'manual',
             match_confidence: 1.0,
             status: 'success'
           })
-          log.checkinManual(member.id, member.name)
-          onRefresh()
+          if (result && result.success === false) {
+            setBlockedMessage(result.message || 'Check-in not allowed.')
+            setState('blocked')
+          } else {
+            setState('match-found')
+            playSuccessSound()
+            log.checkinManual(member.id, member.name)
+            notifyCheckin(member)
+            onRefresh()
+          }
         }
       } else {
         setState('no-match')
@@ -269,15 +437,22 @@ function Kiosk({ onRefresh }: KioskProps) {
         if (member.status === 'expired') {
           setState('expired')
         } else {
-          setState('match-found')
-          await window.electronAPI.createCheckin({
+          const result = await window.electronAPI.createCheckin({
             member_id: member.id,
             method: 'manual',
             match_confidence: 1.0,
             status: 'success'
           })
-          log.checkinManual(member.id, member.name)
-          onRefresh()
+          if (result && result.success === false) {
+            setBlockedMessage(result.message || 'Check-in not allowed.')
+            setState('blocked')
+          } else {
+            setState('match-found')
+            playSuccessSound()
+            log.checkinManual(member.id, member.name)
+            notifyCheckin(member)
+            onRefresh()
+          }
         }
       } else {
         setMemberIdError('Member ID not found. Please try again.')
@@ -300,8 +475,235 @@ function Kiosk({ onRefresh }: KioskProps) {
     setCountdown(AUTO_CLOSE_SECONDS)
   }, [])
 
-  const handleRenew = () => {
-    console.log('Renew plan for:', matchedMember?.id)
+  // ── QR Code check-in ──
+  const openQrScanner = async () => {
+    // Stop any existing stream first so Retry never leaks a camera / triggers "device in use"
+    if (qrStreamRef.current) {
+      qrStreamRef.current.getTracks().forEach(t => t.stop())
+      qrStreamRef.current = null
+    }
+    cancelAnimationFrame(qrFrameRef.current)
+    setQrError('')
+    setQrScanning(true)
+    setShowQrScanner(true)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      })
+      qrStreamRef.current = stream
+      if (qrVideoRef.current) {
+        qrVideoRef.current.srcObject = stream
+        await qrVideoRef.current.play()
+      }
+      // Start the decode loop directly — relying on the 'playing' event can miss
+      // because it often fires during the awaited play() above.
+      startQrDecode()
+    } catch (error: any) {
+      console.error('QR camera error:', error)
+      setQrScanning(false)
+      setQrError('Camera unavailable. Make sure the camera permission is granted and no other app is using it.')
+    }
+  }
+
+  const closeQrScanner = () => {
+    if (qrStreamRef.current) {
+      qrStreamRef.current.getTracks().forEach(t => t.stop())
+      qrStreamRef.current = null
+    }
+    cancelAnimationFrame(qrFrameRef.current)
+    setShowQrScanner(false)
+    setQrScanning(false)
+  }
+
+  const startQrDecode = () => {
+    const video = qrVideoRef.current
+    const canvas = qrCanvasRef.current
+    if (!video || !canvas) return
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return
+
+    const tick = () => {
+      if (!showQrScanner || !video || !canvas || !ctx) return
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert',
+        })
+        if (code && code.data) {
+          handleQrCode(code.data.trim().toUpperCase())
+          return
+        }
+      }
+      qrFrameRef.current = requestAnimationFrame(tick)
+    }
+    tick()
+  }
+
+  const handleQrCode = async (code: string) => {
+    if (!code || qrScanning) return
+    setQrScanning(true)
+    try {
+      // QR contains the member's member_id (e.g. M001 or MEM-XXXX)
+      const result = await window.electronAPI.checkMemberIdExists(code)
+      if (!result) {
+        setQrError('QR code not recognized. This member does not exist in the system.')
+        setQrScanning(false)
+        return
+      }
+      const member = await window.electronAPI.getMember(result.id)
+      closeQrScanner()
+      setMatchedMember(member)
+
+      if (member.status === 'expired') {
+        setState('expired')
+      } else {
+        const res = await window.electronAPI.createCheckin({
+          member_id: member.id,
+          method: 'manual',
+          match_confidence: 1.0,
+          status: 'success',
+        })
+        if (res && res.success === false) {
+          setBlockedMessage(res.message || 'Check-in not allowed.')
+          setState('blocked')
+        } else {
+          setState('match-found')
+          playSuccessSound()
+          log.checkinManual(member.id, member.name)
+          notifyCheckin(member)
+          onRefresh()
+        }
+      }
+    } catch (error: any) {
+      setQrError(error.message || 'Failed to process QR code.')
+      setQrScanning(false)
+    }
+  }
+
+  // Desktop notification when a member checks in (wired to enableNotifications setting)
+  const notifyCheckin = (member: Member) => {
+    if (!kioskSettings.enableNotifications) return
+    try {
+      if (typeof Notification !== 'undefined') {
+        new Notification('REPCHECK', {
+          body: `${member.name} checked in (${member.member_id})`,
+        })
+      }
+    } catch {
+      // Desktop notifications unavailable — ignore
+    }
+  }
+
+  // Open the Renew Plan modal
+  const handleRenew = async () => {
+    if (!matchedMember) return
+    try {
+      const plans = await window.electronAPI.getPlans()
+      setRenewPlans(plans)
+      setRenewPlanId(0)
+      setRenewPaymentMethod('cash')
+      setRenewTxnRef('')
+      setRenewAmount(0)
+      setRenewError('')
+      setShowRenewModal(true)
+    } catch (error: any) {
+      setRenewError(error.message || 'Failed to load plans')
+      setShowRenewModal(true)
+    }
+  }
+
+  // Confirm the renewal: record the payment and extend the member's plan
+  const handleRenewConfirm = async () => {
+    if (!matchedMember || !renewPlanId) return
+    const plan = renewPlans.find(p => p.id === renewPlanId)
+    if (!plan) return
+    setRenewing(true)
+    setRenewError('')
+    try {
+      const start = new Date()
+      const startStr = todayLocalOf(start)
+      // Session packs have no end date — preserve the existing plan_end instead of extending it.
+      // Use undefined (→ NULL) rather than '' so auto-expire never misreads the member as expired.
+      const endStr = plan.type === 'session_pack'
+        ? (matchedMember.plan_end || undefined)
+        : (() => {
+            const end = new Date(start)
+            end.setDate(end.getDate() + (plan.duration_days || 30))
+            return todayLocalOf(end)
+          })()
+
+      const paymentAmount = renewAmount > 0 ? renewAmount : 0
+
+      // Transaction reference is required for card / GCash / bank transfer (only when a payment is made)
+      const requiresRef = paymentAmount > 0 && METHODS_REQUIRING_REF.includes(renewPaymentMethod)
+      if (requiresRef && !renewTxnRef.trim()) {
+        setRenewing(false)
+        setRenewError('Please enter the transaction number for this payment method.')
+        return
+      }
+
+      const newBalance = Math.max(0, (matchedMember.balance || 0) + plan.price - paymentAmount)
+
+      // Record the renewal payment
+      if (paymentAmount > 0) {
+        await window.electronAPI.createPayment({
+          member_id: matchedMember.id,
+          amount: paymentAmount,
+          type: 'renewal',
+          plan_id: plan.id,
+          payment_method: renewPaymentMethod,
+          transaction_ref: requiresRef ? renewTxnRef.trim() : undefined,
+        })
+        log.action({
+          action: 'record_payment',
+          entity_type: 'payment',
+          entity_id: matchedMember.id,
+          details: JSON.stringify({ member_name: matchedMember.name, amount: paymentAmount, type: 'renewal', method: renewPaymentMethod }),
+        })
+      }
+
+      // Extend the member's plan and reactivate them
+      await window.electronAPI.updateMember(matchedMember.id, {
+        name: matchedMember.name,
+        email: matchedMember.email || undefined,
+        phone: matchedMember.phone || undefined,
+        photo: matchedMember.photo || undefined,
+        emergency_contact: matchedMember.emergency_contact || undefined,
+        emergency_phone: matchedMember.emergency_phone || undefined,
+        plan_id: plan.id,
+        plan_start: startStr,
+        plan_end: endStr,
+        height: matchedMember.height,
+        weight: matchedMember.weight,
+        birthday: matchedMember.birthday || undefined,
+        coach_id: matchedMember.coach_id || undefined,
+        coaching_start: matchedMember.coaching_start || undefined,
+        coaching_end: matchedMember.coaching_end || undefined,
+        balance: newBalance,
+        status: 'active',
+        sessions_used: 0,
+        waiver_agreed_at: matchedMember.waiver_agreed_at || undefined,
+      })
+
+      log.action({
+        action: 'renew_plan',
+        entity_type: 'member',
+        entity_id: matchedMember.id,
+        details: JSON.stringify({ member_name: matchedMember.name, plan_name: plan.name }),
+      })
+
+      setShowRenewModal(false)
+      setRenewing(false)
+      resetToIdle()
+      onRefresh()
+    } catch (error: any) {
+      setRenewing(false)
+      setRenewError(error.message || 'Renewal failed. Please try again.')
+    }
   }
 
   const handleManualOverride = async () => {
@@ -362,8 +764,116 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
   }
 
+  // P2 5.1: Guest / trial check-in
+  const openGuestModal = () => {
+    setGuestForm({ name: '', phone: '', type: 'guest' })
+    setGuestSuccess(false)
+    setShowGuestModal(true)
+  }
+
+  const handleGuestSubmit = async () => {
+    if (!guestForm.name.trim()) return
+    setGuestSubmitting(true)
+    try {
+      await window.electronAPI.createGuestCheckin({
+        name: guestForm.name.trim(),
+        phone: guestForm.phone.trim() || undefined,
+        type: guestForm.type,
+      })
+      setGuestSuccess(true)
+      setGuestCount(c => c + 1)
+      setTimeout(() => {
+        setShowGuestModal(false)
+        setGuestSubmitting(false)
+      }, 1800)
+    } catch (error: any) {
+      console.error('Guest check-in failed:', error)
+      setGuestSubmitting(false)
+    }
+  }
+
+  const renderGuestModal = () => (
+    <div className="kiosk-renew-overlay" onClick={() => { if (!guestSubmitting) setShowGuestModal(false) }}>
+      <div className="kiosk-renew-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="kiosk-renew-header">
+          <h2 className="display-text">🪪 Guest / Trial Check-in</h2>
+          <button className="btn-icon" onClick={() => setShowGuestModal(false)} disabled={guestSubmitting}>✕</button>
+        </div>
+        <div className="kiosk-renew-body">
+          {guestSuccess ? (
+            <div className="kiosk-guest-success">
+              <div className="guest-success-icon">✓</div>
+              <span>Welcome, {guestForm.name}! Enjoy your session.</span>
+            </div>
+          ) : (
+            <>
+              <p className="text-muted" style={{ margin: 0 }}>
+                Record a day-pass or trial visitor without creating a full member record.
+              </p>
+              <div className="kiosk-renew-field">
+                <label>Type</label>
+                <div className="kiosk-guest-type-row">
+                  <button
+                    type="button"
+                    className={`btn ${guestForm.type === 'guest' ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+                    onClick={() => setGuestForm({ ...guestForm, type: 'guest' })}
+                  >
+                    Day Pass
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${guestForm.type === 'trial' ? 'btn-primary' : 'btn-secondary'} btn-sm`}
+                    onClick={() => setGuestForm({ ...guestForm, type: 'trial' })}
+                  >
+                    Trial
+                  </button>
+                </div>
+              </div>
+              <div className="kiosk-renew-field">
+                <label>Name *</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={guestForm.name}
+                  onChange={(e) => setGuestForm({ ...guestForm, name: e.target.value })}
+                  placeholder="Guest name"
+                  autoFocus
+                />
+              </div>
+              <div className="kiosk-renew-field">
+                <label>Phone (optional)</label>
+                <input
+                  type="tel"
+                  className="input"
+                  value={guestForm.phone}
+                  onChange={(e) => setGuestForm({ ...guestForm, phone: e.target.value })}
+                  placeholder="+63 9XX XXX XXXX"
+                />
+              </div>
+            </>
+          )}
+        </div>
+        {!guestSuccess && (
+          <div className="kiosk-renew-footer">
+            <button className="btn btn-secondary" onClick={() => setShowGuestModal(false)} disabled={guestSubmitting}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={handleGuestSubmit} disabled={!guestForm.name.trim() || guestSubmitting}>
+              {guestSubmitting ? 'Saving...' : 'Check In Guest'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
   const renderIdleState = () => (
     <div className="kiosk-idle animate-fade-in" onClick={handleIdleAreaClick}>
+      {!kioskSettings.scannerEnabled && (
+        <div className="kiosk-scanner-disabled-note">
+          ⚠️ Fingerprint scanner is disabled in Settings — use Member ID or manual search.
+        </div>
+      )}
       {kioskLogo && (
         <div className="kiosk-big-logo">
           <img src={kioskLogo} alt="Gym Logo" />
@@ -414,8 +924,21 @@ function Kiosk({ onRefresh }: KioskProps) {
         </div>
       </div>
       
-      <h1 className="display-text kiosk-title">Waiting for fingerprint...</h1>
+      <h1 className="display-text kiosk-title">
+        {kioskSettings.scannerEnabled ? 'Waiting for fingerprint...' : 'Scanner disabled'}
+      </h1>
       <p className="kiosk-subtitle">Tap anywhere to type Member ID</p>
+
+      {/* Promo / tip carousel (P2 5.1) */}
+      <div className="kiosk-promo-carousel" onClick={(e) => e.stopPropagation()}>
+        <span className="kiosk-promo-icon">{PROMOS[promoIndex].icon}</span>
+        <span className="kiosk-promo-text">{PROMOS[promoIndex].text}</span>
+        <span className="kiosk-promo-dots">
+          {PROMOS.map((_, i) => (
+            <span key={i} className={`kiosk-promo-dot ${i === promoIndex ? 'active' : ''}`} />
+          ))}
+        </span>
+      </div>
       
       <button 
         className="kiosk-manual-link"
@@ -442,6 +965,33 @@ function Kiosk({ onRefresh }: KioskProps) {
             Search
           </button>
         </div>
+      )}
+
+      {/* QR code check-in button */}
+      <button
+        className="kiosk-manual-link"
+        onClick={(e) => {
+          e.stopPropagation()
+          openQrScanner()
+        }}
+      >
+        📷 Scan QR Code
+      </button>
+
+      {/* Guest / trial check-in button (P2 5.1) */}
+      <button
+        className="kiosk-manual-link"
+        onClick={(e) => {
+          e.stopPropagation()
+          openGuestModal()
+        }}
+      >
+        🪪 Guest / Trial Check-in
+      </button>
+
+      {/* Today's guest count */}
+      {guestCount > 0 && (
+        <span className="kiosk-guest-count">👥 {guestCount} guest{guestCount !== 1 ? 's' : ''} today</span>
       )}
 
       {/* Open/Close external kiosk window buttons */}
@@ -501,7 +1051,7 @@ function Kiosk({ onRefresh }: KioskProps) {
       <div className="profile-card">
         <div className="profile-header">
           <div className="profile-avatar">
-            {matchedMember.photo ? (
+            {matchedMember.photo && kioskSettings.showMemberPhotos ? (
               <img src={matchedMember.photo} alt={matchedMember.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '16px' }} />
             ) : (
               matchedMember.name.charAt(0).toUpperCase()
@@ -574,7 +1124,7 @@ function Kiosk({ onRefresh }: KioskProps) {
       <div className="profile-card">
         <div className="profile-header">
           <div className="profile-avatar">
-            {matchedMember.photo ? (
+            {matchedMember.photo && kioskSettings.showMemberPhotos ? (
               <img src={matchedMember.photo} alt={matchedMember.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '16px' }} />
             ) : (
               matchedMember.name.charAt(0).toUpperCase()
@@ -656,6 +1206,112 @@ function Kiosk({ onRefresh }: KioskProps) {
     </div>
   )
 
+  const renderBlocked = () => (
+    <div className="kiosk-no-match animate-fade-in">
+      <div className="no-match-icon">⛔</div>
+      <h2 className="display-text">Check-in Blocked</h2>
+      <p className="text-muted">{blockedMessage}</p>
+      <div className="no-match-actions">
+        <button className="btn btn-primary" onClick={resetToIdle}>
+          Try Again
+        </button>
+        <button className="btn btn-secondary" onClick={() => {
+          resetToIdle()
+          setShowManualSearch(true)
+        }}>
+          Search Manually
+        </button>
+      </div>
+    </div>
+  )
+
+  const renderRenewModal = () => (
+    <div className="kiosk-renew-overlay" onClick={() => { if (!renewing) setShowRenewModal(false) }}>
+      <div className="kiosk-renew-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="kiosk-renew-header">
+          <h2 className="display-text">Renew Plan</h2>
+          <button className="btn-icon" onClick={() => setShowRenewModal(false)} disabled={renewing}>✕</button>
+        </div>
+        <div className="kiosk-renew-body">
+          <p className="text-muted" style={{ margin: 0 }}>
+            {matchedMember?.name} — current plan: {matchedMember?.plan_name || 'No plan'}
+          </p>
+          <div className="kiosk-renew-field">
+            <label>Plan</label>
+            <select
+              className="input"
+              value={renewPlanId}
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                setRenewPlanId(id)
+                const plan = renewPlans.find(p => p.id === id)
+                setRenewAmount(plan?.price || 0)
+              }}
+            >
+              <option value={0}>— Select a plan —</option>
+              {renewPlans.map((plan) => (
+                <option key={plan.id} value={plan.id}>{plan.name} (₱{plan.price})</option>
+              ))}
+            </select>
+          </div>
+          <div className="kiosk-renew-row">
+            <div className="kiosk-renew-field">
+              <label>Payment Method</label>
+              <select className="input" value={renewPaymentMethod} onChange={(e) => { setRenewPaymentMethod(e.target.value); setRenewTxnRef('') }}>
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="gcash">GCash</option>
+                <option value="bank_transfer">Bank Transfer</option>
+              </select>
+            </div>
+            {METHODS_REQUIRING_REF.includes(renewPaymentMethod) && (
+              <div className="kiosk-renew-field">
+                <label>Transaction Number *</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={renewTxnRef}
+                  onChange={(e) => setRenewTxnRef(e.target.value)}
+                  placeholder="e.g. 1234567890"
+                />
+                {!renewTxnRef.trim() && renewAmount > 0 && METHODS_REQUIRING_REF.includes(renewPaymentMethod) && (
+                  <div className="kiosk-renew-hint">Transaction number is required for this payment method.</div>
+                )}
+              </div>
+            )}
+            <div className="kiosk-renew-field">
+              <label>Amount (₱)</label>
+              <input
+                type="number"
+                className="input"
+                value={renewAmount || ''}
+                onChange={(e) => setRenewAmount(Number(e.target.value))}
+                placeholder="0.00"
+                step="0.01"
+                min="1"
+              />
+            </div>
+          </div>
+          {renewError && <div className="kiosk-renew-error">{renewError}</div>}
+          {matchedMember && (
+            <div className="kiosk-renew-summary">
+              New plan: {renewPlans.find(p => p.id === renewPlanId)?.name || '—'} · starts{' '}
+              {new Date().toLocaleDateString()}
+            </div>
+          )}
+        </div>
+        <div className="kiosk-renew-footer">
+          <button className="btn btn-secondary" onClick={() => setShowRenewModal(false)} disabled={renewing}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleRenewConfirm} disabled={!renewPlanId || renewing}>
+            {renewing ? 'Renewing...' : 'Renew Now'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div className="kiosk">
       {state === 'idle' && renderIdleState()}
@@ -663,6 +1319,46 @@ function Kiosk({ onRefresh }: KioskProps) {
       {state === 'match-found' && renderMatchFound()}
       {state === 'expired' && renderExpired()}
       {state === 'no-match' && renderNoMatch()}
+      {state === 'blocked' && renderBlocked()}
+      {showRenewModal && renderRenewModal()}
+      {showGuestModal && renderGuestModal()}
+
+      {/* ── QR Scanner Modal ── */}
+      {showQrScanner && (
+        <div className="kiosk-renew-overlay" onClick={() => { if (!qrScanning) closeQrScanner() }}>
+          <div className="kiosk-qr-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="kiosk-renew-header">
+              <h2 className="display-text">📷 Scan QR Code</h2>
+              <button className="btn-icon" onClick={closeQrScanner} disabled={qrScanning}>✕</button>
+            </div>
+            <div className="kiosk-qr-body">
+              <div className="kiosk-qr-viewport">
+                <video ref={qrVideoRef} playsInline muted className="kiosk-qr-video" />
+                <canvas ref={qrCanvasRef} style={{ display: 'none' }} />
+                {qrScanning && !qrError && (
+                  <div className="kiosk-qr-guide">
+                    <div className="kiosk-qr-frame" />
+                    <span className="kiosk-qr-hint">Point the camera at the member's QR code</span>
+                  </div>
+                )}
+                {qrError && (
+                  <div className="kiosk-qr-error">
+                    <span>⚠️ {qrError}</span>
+                    <button className="btn btn-secondary btn-sm" onClick={() => { setQrError(''); setQrScanning(true); openQrScanner() }}>
+                      Retry Camera
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="kiosk-renew-footer">
+              <button className="btn btn-secondary" onClick={closeQrScanner} disabled={qrScanning}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

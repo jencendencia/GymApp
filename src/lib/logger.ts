@@ -1,5 +1,12 @@
 import { CreateActivityLogInput } from '../types/electron'
 
+// Track the currently logged-in user so activity logs show who did what (P2 5.6)
+let currentUser: string | null = null
+
+export function setLogUser(username: string | null) {
+  currentUser = username
+}
+
 /**
  * Unified activity logger for the entire app.
  * Call `log.action(...)` from any component to record user activity.
@@ -9,7 +16,7 @@ export const log = {
     try {
       await window.electronAPI.createActivityLog({
         ...input,
-        user: 'staff',
+        user: currentUser || input.user || 'staff',
       })
     } catch (error) {
       console.error('Failed to log activity:', error)
