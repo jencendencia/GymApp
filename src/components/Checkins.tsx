@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react'
 import './Checkins.css'
 import { Checkin } from '../types/electron'
 import { todayLocal } from '../lib/dates'
+import { useDataVersion } from '../lib/data'
 
 function Checkins() {
+  const dataVersion = useDataVersion()
   const [checkins, setCheckins] = useState<Checkin[]>([])
   const [exporting, setExporting] = useState(false)
   const [selectedDate, setSelectedDate] = useState(todayLocal())
@@ -16,7 +18,7 @@ function Checkins() {
 
   useEffect(() => {
     loadCheckins()
-  }, [selectedDate])
+  }, [selectedDate, dataVersion])
 
   const loadCheckins = async () => {
     try {

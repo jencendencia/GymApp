@@ -3,9 +3,12 @@ import './Coach.css'
 import { Coach as CoachType, Member, CoachFeePayment } from '../types/electron'
 import { log } from '../lib/logger'
 import { todayLocal, todayLocalOf } from '../lib/dates'
+import { notifyDataChanged, useDataVersion } from '../lib/data'
+import { formatMoney } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
 
 function Coach() {
+  const dataVersion = useDataVersion()
   const [activeTab, setActiveTab] = useState<'registration' | 'members' | 'payments'>('registration')
   const [coaches, setCoaches] = useState<CoachType[]>([])
   const [selectedCoach, setSelectedCoach] = useState<CoachType | null>(null)
@@ -55,7 +58,7 @@ function Coach() {
   useEffect(() => {
     loadCoaches()
     loadUnassignedMembers()
-  }, [])
+  }, [dataVersion])
 
   const loadCoaches = async () => {
     try {
@@ -131,7 +134,7 @@ function Coach() {
       }
       setShowCoachForm(false)
       resetCoachForm()
-      loadCoaches()
+      notifyDataChanged()
     } catch (error) {
       console.error('Failed to save coach:', error)
     }
@@ -146,7 +149,7 @@ function Coach() {
         setSelectedCoachForMembers(null)
         setCoachMembers([])
       }
-      loadCoaches()
+      notifyDataChanged()
       if (coach) {
         log.deleteCoach(id, coach.name)
       }
@@ -313,7 +316,7 @@ const handleRecordFeePayment = async () => {
       } else if (selectedCoachForMembers) {
         loadCoachMembers(selectedCoachForMembers)
       }
-      loadCoaches()
+      notifyDataChanged()
     } catch (error) {
       console.error('Failed to enroll member:', error)
     }
@@ -400,7 +403,7 @@ const handleRecordFeePayment = async () => {
                         <td className="coach-name">{coach.name}</td>
                         <td>{coach.specialty || '—'}</td>
                         <td className="mono-text">
-                          {coach.professional_fee ? `₱${Number(coach.professional_fee).toFixed(2)}` : '—'}
+                          {coach.professional_fee ? formatMoney(coach.professional_fee) : '—'}
                         </td>
                         <td>
                           <div className="coach-actions">
@@ -564,12 +567,12 @@ const handleRecordFeePayment = async () => {
               <div className="payment-summary-cards">
                 <div className="summary-card">
                   <span className="summary-label">Daily Total</span>
-                  <span className="summary-value accent">₱{dailyTotal.toFixed(2)}</span>
+                  <span className="summary-value accent">{formatMoney(dailyTotal)}</span>
                   <span className="summary-count">{dailyPayments.length} payment(s)</span>
                 </div>
                 <div className="summary-card">
                   <span className="summary-label">Monthly Total</span>
-                  <span className="summary-value">₱{monthlyTotal.toFixed(2)}</span>
+                  <span className="summary-value">{formatMoney(monthlyTotal)}</span>
                   <span className="summary-count">{monthlyPayments.length} payment(s)</span>
                 </div>
               </div>
@@ -597,7 +600,7 @@ const handleRecordFeePayment = async () => {
                           <tr key={p.id}>
                             <td className="mono-text">{new Date(p.created_at.replace(' ', 'T') + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</td>
                             <td>{p.member_name}<span className="text-faint"> ({p.member_code})</span></td>
-                            <td className="mono-text fee-amount">₱{Number(p.amount).toFixed(2)}</td>
+                            <td className="mono-text fee-amount">{formatMoney(p.amount)}</td>
                             <td className="text-faint">{p.notes || '—'}</td>
                           </tr>
                         ))
@@ -630,7 +633,7 @@ const handleRecordFeePayment = async () => {
                           <tr key={p.id}>
                             <td className="mono-text">{new Date(p.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</td>
                             <td>{p.member_name}<span className="text-faint"> ({p.member_code})</span></td>
-                            <td className="mono-text fee-amount">₱{Number(p.amount).toFixed(2)}</td>
+                            <td className="mono-text fee-amount">{formatMoney(p.amount)}</td>
                             <td className="text-faint">{p.notes || '—'}</td>
                           </tr>
                         ))
@@ -716,7 +719,7 @@ const handleRecordFeePayment = async () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Professional Fee (₱)</label>
+                  <label>Professional Fee</label>
                   <input
                     type="number"
                     className="input"
@@ -753,8 +756,8 @@ const handleRecordFeePayment = async () => {
               <div className="modal-header-left">
                 <h2 className="display-text">Fee Payments - {feeCoachName}</h2>
                 <span className="fee-summary">
-                  ₱{feeCollected.toFixed(2)} collected
-                  {feeCoachFee > 0 && ` of ₱${feeCoachFee.toFixed(2)} fee`}
+                  {formatMoney(feeCollected)} collected
+                  {feeCoachFee > 0 && ` of ${formatMoney(feeCoachFee)} fee`}
                 </span>
               </div>
               <button className="btn-icon" onClick={() => setShowFeeModal(false)}>✕</button>
@@ -780,7 +783,7 @@ const handleRecordFeePayment = async () => {
                     </select>
                   </div>
                   <div className="form-group">
-                    <label>Amount (₱)</label>
+                    <label>Amount</label>
                     <input
                       type="number"
                       className="input"
@@ -843,7 +846,7 @@ const handleRecordFeePayment = async () => {
                               <span className="text-faint"> ({payment.member_code})</span>
                             </td>
                             <td className="mono-text fee-amount">
-                              ₱{Number(payment.amount).toFixed(2)}
+                              {formatMoney(payment.amount)}
                             </td>
                             <td className="text-faint">{payment.notes || '—'}</td>
                           </tr>
@@ -887,7 +890,7 @@ const handleRecordFeePayment = async () => {
                     return selectedCoach?.professional_fee ? (
                       <div className="enroll-coach-fee-display">
                         <span className="enroll-coach-fee-label">Professional Fee</span>
-                        <span className="enroll-coach-fee-amount">₱{Number(selectedCoach.professional_fee).toFixed(2)}</span>
+                        <span className="enroll-coach-fee-amount">{formatMoney(selectedCoach.professional_fee)}</span>
                       </div>
                     ) : selectedCoach ? (
                       <div className="enroll-coach-fee-display">
@@ -947,7 +950,7 @@ const handleRecordFeePayment = async () => {
                   <div className="enroll-payment-form" style={{ marginTop: 12 }}>
                     <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr auto' }}>
                       <div className="form-group">
-                        <label>Amount (₱)</label>
+                        <label>Amount</label>
                         <input
                           type="number"
                           className="input"

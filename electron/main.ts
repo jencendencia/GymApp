@@ -8,7 +8,7 @@ import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
 import nodemailer from 'nodemailer'
 import { autoUpdater } from 'electron-updater'
-import { todayLocal, nowLocal, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike } from './utils'
+import { todayLocal, nowLocal, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays } from './utils'
 
 let mainWindow: BrowserWindow | null = null
 let kioskWindow: BrowserWindow | null = null
@@ -62,7 +62,7 @@ function verifyPassword(password: string, stored: string | null | undefined): bo
 // so a copied database file doesn't leak credentials. Values are prefixed so we can
 // distinguish ciphertext from legacy plaintext and from non-secret settings.
 const SECRET_PREFIX = 'enc:v1:'
-const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail'])
+const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail', 'backupPassword'])
 
 function isSecretSetting(key: string): boolean {
   return SECRET_KEYS.has(key)
@@ -315,6 +315,8 @@ function initDatabase() {
     { table: 'coaches', column: 'archived', def: 'INTEGER DEFAULT 0' },
     { table: 'payments', column: 'status', def: "TEXT DEFAULT 'completed'" },
     { table: 'payments', column: 'note', def: 'TEXT DEFAULT NULL' },
+    // P2 5.2: auto-renew flag — renews the plan automatically on expiry
+    { table: 'members', column: 'auto_renew', def: 'INTEGER DEFAULT 0' },
   ]
 
   for (const col of columnsToAdd) {
@@ -607,11 +609,46 @@ function setupKioskAutoLaunch() {
   })
 }
 
+// ── Auto-renewal (P2 5.2): members flagged auto_renew are renewed automatically ──
+// When a member's plan lapses and they have auto-renew enabled + a plan with a duration,
+// a renewal payment is recorded and the plan_end is extended. Runs inside autoExpireMembers.
+function processAutoRenewals() {
+  const due = db?.prepare(`
+    SELECT m.id, m.member_id, m.name, m.plan_end, p.duration_days, p.price, p.id as plan_id
+    FROM members m
+    LEFT JOIN plans p ON m.plan_id = p.id
+    WHERE m.auto_renew = 1 AND m.status = 'active' AND m.archived = 0
+      AND m.plan_end IS NOT NULL AND m.plan_end != '' AND m.plan_end < date('now', 'localtime')
+      AND p.duration_days IS NOT NULL AND p.duration_days > 0
+  `).all() as any[] || []
+  for (const m of due) {
+    try {
+      const start = m.plan_end
+      const end = addDays(start, m.duration_days)
+      // Record the renewal payment (method 'auto') and extend the plan
+      db?.prepare(`INSERT INTO payments (member_id, amount, type, plan_id, payment_method, status, note)
+        VALUES (?, ?, 'renewal', ?, 'auto', 'completed', ?)`)
+        .run(m.id, m.price, m.plan_id, `Auto-renewed from ${start}`)
+      db?.prepare(`UPDATE members SET plan_start = ?, plan_end = ?, sessions_used = 0, status = 'active' WHERE id = ?`)
+        .run(start, end, m.id)
+      db?.prepare(`INSERT INTO activity_logs (action, entity_type, entity_id, details, user)
+        VALUES ('auto_renewal', 'member', ?, ?, 'system')`)
+        .run(m.id, JSON.stringify({ member_name: m.name, plan_end: end, amount: m.price }))
+      logMain('info', 'Auto-renewed member', { id: m.id, name: m.name, newEnd: end })
+    } catch (error: any) {
+      logMain('error', 'Auto-renewal failed', { id: m.id, error: error.message })
+    }
+  }
+}
+
 // Auto-expire members whose plan_end has passed (local-time aware)
 function autoExpireMembers() {
+  // Renew auto-renew members first so they stay active (P2 5.2)
+  processAutoRenewals()
   db?.prepare(`
     UPDATE members SET status = 'expired'
     WHERE plan_end IS NOT NULL AND plan_end < date('now', 'localtime') AND status = 'active' AND archived = 0
+      AND (auto_renew IS NULL OR auto_renew = 0)
   `).run()
 }
 
@@ -932,10 +969,35 @@ function buildBackupJson(): string {
   return JSON.stringify(serialized, null, 2)
 }
 
+// ── Backup encryption (P1 3.6): optional AES-256-GCM when a backup password is set ──
+function backupPasswordSetting(): string | null {
+  const row = db?.prepare("SELECT value FROM settings WHERE key = 'backupPassword'").get() as any
+  if (!row?.value) return null
+  return decryptSecret(row.value)
+}
+
 // Write a full backup ZIP to the given path (used by manual + safety + scheduled backups)
 function writeBackupZip(targetPath: string) {
   const zip = new AdmZip()
-  zip.addFile('data.json', Buffer.from(buildBackupJson(), 'utf-8'))
+  const json = Buffer.from(buildBackupJson(), 'utf-8')
+  const encRow = db?.prepare("SELECT value FROM settings WHERE key = 'backupEncryptionEnabled'").get() as any
+  const password = encRow?.value === 'true' ? backupPasswordSetting() : null
+  if (password) {
+    // AES-256-GCM with a scrypt-derived key; salt/iv/authTag stored in backup.meta
+    const salt = crypto.randomBytes(16)
+    const iv = crypto.randomBytes(12)
+    const key = crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 })
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+    const ciphertext = Buffer.concat([cipher.update(json), cipher.final()])
+    const authTag = cipher.getAuthTag()
+    zip.addFile('data.enc', ciphertext)
+    zip.addFile('backup.meta', Buffer.from(JSON.stringify({
+      version: 1, kdf: 'scrypt', N: 16384, r: 8, p: 1,
+      salt: salt.toString('base64'), iv: iv.toString('base64'), authTag: authTag.toString('base64'),
+    })))
+  } else {
+    zip.addFile('data.json', json)
+  }
   // P1 4.5: include the on-disk member photos folder so backups stay complete
   try {
     const photos = photoDir()
@@ -1009,8 +1071,8 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, auto_renew)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -1029,7 +1091,8 @@ function setupIPC() {
       member.coaching_start || null,
       member.coaching_end || null,
       member.balance,
-      member.waiver_agreed_at || null
+      member.waiver_agreed_at || null,
+      member.auto_renew ? 1 : 0
     )
     // P2 5.5: fire-and-forget welcome email on enrollment (setting-gated, SMTP optional)
     if (res?.lastInsertRowid) {
@@ -1044,7 +1107,7 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     return db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), sessions_used = COALESCE(?, sessions_used)
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
       WHERE id = ?
     `).run(
       member.name,
@@ -1066,6 +1129,7 @@ function setupIPC() {
       member.status,
       member.waiver_agreed_at || null,
       member.sessions_used ?? undefined,
+      member.auto_renew === undefined ? undefined : (member.auto_renew ? 1 : 0),
       id
     )
   })
@@ -1615,7 +1679,7 @@ function setupIPC() {
     }
   })
 
-  ipcMain.handle('restore-backup', async () => {
+  ipcMain.handle('restore-backup', async (_, passwordArg?: string) => {
     try {
       if (!db) throw new Error('Database not initialized')
 
@@ -1640,11 +1704,33 @@ function setupIPC() {
       const zipEntries = zip.getEntries()
 
       const dataEntry = zipEntries.find(e => e.entryName === 'data.json')
-      if (!dataEntry) {
+      const encEntry = zipEntries.find(e => e.entryName === 'data.enc')
+      const metaEntry = zipEntries.find(e => e.entryName === 'backup.meta')
+
+      let jsonData: string
+      if (dataEntry) {
+        jsonData = dataEntry.getData().toString('utf-8')
+      } else if (encEntry && metaEntry) {
+        // Encrypted backup (P1 3.6) — need the passphrase
+        const password = passwordArg || backupPasswordSetting()
+        if (!password) {
+          return { success: false, reason: 'needs_password', message: 'This backup is encrypted. Enter the backup password.' }
+        }
+        try {
+          const meta = JSON.parse(metaEntry.getData().toString('utf-8'))
+          const key = crypto.scryptSync(password, Buffer.from(meta.salt, 'base64'), 32, {
+            N: meta.N || 16384, r: meta.r || 8, p: meta.p || 1,
+          })
+          const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(meta.iv, 'base64'))
+          decipher.setAuthTag(Buffer.from(meta.authTag, 'base64'))
+          jsonData = Buffer.concat([decipher.update(encEntry.getData()), decipher.final()]).toString('utf-8')
+        } catch {
+          return { success: false, reason: 'wrong_password', message: 'Incorrect backup password. The backup could not be decrypted.' }
+        }
+      } else {
         return { success: false, reason: 'Invalid backup file: data.json not found' }
       }
 
-      const jsonData = dataEntry.getData().toString('utf-8')
       let backupData: Record<string, any[]>
       try {
         backupData = JSON.parse(jsonData)

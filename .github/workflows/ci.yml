@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -27,8 +28,62 @@ jobs:
       - name: Typecheck (electron)
         run: npx tsc -p tsconfig.node.json --noEmit
 
+      - name: Lint
+        run: npm run lint
+
       - name: Unit tests
         run: npx vitest run
 
       - name: Build
         run: npx vite build
+
+  # P2 6.3: build the Windows installer on every push/PR so packaging stays green
+  build:
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installer (no publish)
+        run: npm run electron:build -- --publish never
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: repcheck-installer
+          path: release/*
+          if-no-files-found: error
+
+  # P2 6.3: on a version tag (vX.Y.Z) build and publish to GitHub Releases.
+  # electron-builder's publish config (owner jencendencia / repo GymApp) uploads the
+  # installer, blockmap, and latest.yml so the built-in auto-updater works.
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & publish to GitHub Releases
+        run: npm run electron:build -- --publish always

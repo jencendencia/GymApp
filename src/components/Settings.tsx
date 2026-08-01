@@ -14,7 +14,10 @@ interface SettingsState {
   backupEnabled: boolean
   backupHour: number
   backupKeep: number
+  backupEncryptionEnabled: boolean
+  backupPassword: string
   balanceBlockThreshold: number
+  currency: string
   appLogo: string
   kioskLogo: string
   smtpHost: string
@@ -58,7 +61,10 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     backupEnabled: false,
     backupHour: 23,
     backupKeep: 7,
+    backupEncryptionEnabled: false,
+    backupPassword: '',
     balanceBlockThreshold: 0,
+    currency: '₱',
     appLogo: '',
     kioskLogo: '',
     smtpHost: '',
@@ -101,7 +107,10 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.backupEnabled) setSettings(prev => ({ ...prev, backupEnabled: data.backupEnabled === 'true' }))
       if (data.backupHour) setSettings(prev => ({ ...prev, backupHour: Number(data.backupHour) }))
       if (data.backupKeep) setSettings(prev => ({ ...prev, backupKeep: Number(data.backupKeep) }))
+      if (data.backupEncryptionEnabled) setSettings(prev => ({ ...prev, backupEncryptionEnabled: data.backupEncryptionEnabled === 'true' }))
+      if (data.backupPassword) setSettings(prev => ({ ...prev, backupPassword: data.backupPassword }))
       if (data.balanceBlockThreshold) setSettings(prev => ({ ...prev, balanceBlockThreshold: Number(data.balanceBlockThreshold) }))
+      if (data.currency) setSettings(prev => ({ ...prev, currency: data.currency }))
       if (data.appLogo) setSettings(prev => ({ ...prev, appLogo: data.appLogo }))
       if (data.kioskLogo) setSettings(prev => ({ ...prev, kioskLogo: data.kioskLogo }))
       if (data.smtpHost) {
@@ -139,7 +148,10 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         backupEnabled: settings.backupEnabled.toString(),
         backupHour: settings.backupHour.toString(),
         backupKeep: settings.backupKeep.toString(),
+        backupEncryptionEnabled: settings.backupEncryptionEnabled.toString(),
+        backupPassword: settings.backupPassword,
         balanceBlockThreshold: settings.balanceBlockThreshold.toString(),
+        currency: settings.currency,
         appLogo: settings.appLogo,
         kioskLogo: settings.kioskLogo,
         smtpHost: settings.smtpHost,
@@ -165,7 +177,9 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         backupEnabled: settings.backupEnabled,
         backupHour: settings.backupHour,
         backupKeep: settings.backupKeep,
+        backupEncryptionEnabled: settings.backupEncryptionEnabled,
         balanceBlockThreshold: settings.balanceBlockThreshold,
+        currency: settings.currency,
       })
       setTimeout(() => setSaved(false), 2000)
     } catch (error) {
@@ -254,7 +268,20 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     setShowRestoreConfirm(false)
     setBackupBanner({ type: 'loading', message: 'Restoring from backup...' })
     try {
-      const result = await window.electronAPI.restoreBackup()
+      // Encrypted backups need the passphrase (P1 3.6) — prompt until correct or cancelled
+      let result = await window.electronAPI.restoreBackup()
+      while (result.reason === 'needs_password' || result.reason === 'wrong_password') {
+        const pw = window.prompt(
+          result.reason === 'wrong_password'
+            ? 'Incorrect password. Enter the backup password to decrypt this backup:'
+            : 'This backup is encrypted. Enter the backup password to decrypt it:'
+        )
+        if (pw === null) {
+          setBackupBanner({ type: 'error', message: 'Restore cancelled — password required to decrypt this backup.' })
+          return
+        }
+        result = await window.electronAPI.restoreBackup(pw)
+      }
       if (result.success) {
         setBackupBanner({ type: 'success', message: 'Backup restored successfully! Reloading data...' })
         log.restoreBackup()
@@ -263,7 +290,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       } else if (result.reason === 'cancelled') {
         setBackupBanner({ type: 'none' })
       } else {
-        setBackupBanner({ type: 'error', message: `Restore failed: ${result.reason}` })
+        setBackupBanner({ type: 'error', message: `Restore failed: ${result.reason || result.message}` })
       }
     } catch (error: any) {
       setBackupBanner({ type: 'error', message: `Restore failed: ${error.message}` })
@@ -350,6 +377,25 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 value={settings.appName}
                 onChange={(e) => setSettings({ ...settings, appName: e.target.value })}
               />
+            </div>
+
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Currency</span>
+                <span className="setting-description">Symbol used across the app for prices and balances (P2 5.7)</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.currency}
+                onChange={(e) => setSettings({ ...settings, currency: e.target.value })}
+                style={{ width: 160 }}
+              >
+                <option value="₱">₱ — Philippine Peso</option>
+                <option value="$">$ — US Dollar</option>
+                <option value="€">€ — Euro</option>
+                <option value="£">£ — Pound Sterling</option>
+                <option value="¥">¥ — Yen / Yuan</option>
+              </select>
             </div>
 
             <div className="setting-item logo-setting-item">
@@ -546,7 +592,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Block Check-in Over Due Balance</span>
                 <span className="setting-description">
-                  Members with an outstanding balance above this amount (₱) are blocked at the kiosk until they settle.
+                  Members with an outstanding balance above this amount ({settings.currency || '₱'}) are blocked at the kiosk until they settle.
                   Set to 0 to disable.
                 </span>
               </div>
@@ -860,6 +906,40 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 />
                 <span className="toggle-slider" />
               </label>
+            </div>
+            <div className="setting-item">
+              <div className="setting-info">
+                <span className="setting-label">Encrypt Backups</span>
+                <span className="setting-description">
+                  AES-256 encrypts every backup (manual + automatic) with the password below (P1 3.6).
+                  Keep the password safe — you'll need it to restore.
+                </span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.backupEncryptionEnabled}
+                  onChange={(e) => setSettings({ ...settings, backupEncryptionEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: 'none' }}>
+              <div className="setting-info">
+                <span className="setting-label">Backup Password</span>
+                <span className="setting-description">
+                  🔒 Stored encrypted (Windows security). Required to decrypt backups.
+                </span>
+              </div>
+              <input
+                type="password"
+                className="input setting-input"
+                value={settings.backupPassword}
+                onChange={(e) => setSettings({ ...settings, backupPassword: e.target.value })}
+                placeholder={settings.backupEncryptionEnabled ? 'Enter a backup password' : 'Encryption is off'}
+                disabled={!settings.backupEncryptionEnabled}
+                style={{ maxWidth: 280 }}
+              />
             </div>
             <div className="setting-item" style={{ borderBottom: 'none' }}>
               <div className="setting-info">

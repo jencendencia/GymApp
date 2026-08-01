@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import './ActivityLog.css'
 import { ActivityLog as ActivityLogType } from '../types/electron'
 import { todayLocal, todayLocalOf } from '../lib/dates'
+import { useDataVersion } from '../lib/data'
+import { formatMoney } from '../lib/format'
 
 type ActionFilter = 'all' | 'checkin' | 'member' | 'coach' | 'plan' | 'settings'
 
@@ -39,6 +41,7 @@ const ACTION_META: Record<string, { label: string; icon: string; category: Actio
 }
 
 function ActivityLog() {
+  const dataVersion = useDataVersion()
   const [logs, setLogs] = useState<ActivityLogType[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<ActionFilter>('all')
@@ -52,7 +55,7 @@ function ActivityLog() {
 
   useEffect(() => {
     loadLogs()
-  }, [userFilter])
+  }, [userFilter, dataVersion])
 
   const loadLogs = async (append = false) => {
     setLoading(!append)
@@ -179,7 +182,7 @@ function ActivityLog() {
       case 'delete_coach':
         return details.name || ''
       case 'record_fee_payment':
-        return `${details.member_name || ''} — ₱${details.amount || 0}`
+        return `${details.member_name || ''} — ${formatMoney(details.amount || 0)}`
       case 'create_plan':
       case 'update_plan':
       case 'delete_plan':
@@ -315,7 +318,7 @@ function ActivityLog() {
                             )}
                             {log.action === 'record_fee_payment' && details && (
                               <div className="entry-amount">
-                                <span className="amount-badge">₱{Number(details.amount).toFixed(2)}</span>
+                                <span className="amount-badge">{formatMoney(details.amount)}</span>
                               </div>
                             )}
                           </div>

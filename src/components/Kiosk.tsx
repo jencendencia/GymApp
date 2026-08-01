@@ -4,6 +4,7 @@ import jsQR from 'jsqr'
 import { Member, TodayStats, Plan } from '../types/electron'
 import { log } from '../lib/logger'
 import { todayLocalOf } from '../lib/dates'
+import { formatMoney } from '../lib/format'
 
 interface KioskProps {
   onRefresh: () => void
@@ -1080,7 +1081,7 @@ function Kiosk({ onRefresh }: KioskProps) {
           <div className="metadata-item">
             <span className="metadata-label">Balance</span>
             <span className="metadata-value mono-text">
-              ₱{matchedMember.balance.toFixed(2)}
+              {formatMoney(matchedMember.balance)}
             </span>
           </div>
         </div>
@@ -1151,7 +1152,7 @@ function Kiosk({ onRefresh }: KioskProps) {
           <div className="metadata-item">
             <span className="metadata-label">Balance Due</span>
             <span className="metadata-value mono-text danger">
-              ₱{matchedMember.balance.toFixed(2)}
+              {formatMoney(matchedMember.balance)}
             </span>
           </div>
         </div>
@@ -1250,7 +1251,7 @@ function Kiosk({ onRefresh }: KioskProps) {
             >
               <option value={0}>— Select a plan —</option>
               {renewPlans.map((plan) => (
-                <option key={plan.id} value={plan.id}>{plan.name} (₱{plan.price})</option>
+                <option key={plan.id} value={plan.id}>{plan.name} ({formatMoney(plan.price)})</option>
               ))}
             </select>
           </div>
@@ -1280,7 +1281,7 @@ function Kiosk({ onRefresh }: KioskProps) {
               </div>
             )}
             <div className="kiosk-renew-field">
-              <label>Amount (₱)</label>
+              <label>Amount</label>
               <input
                 type="number"
                 className="input"

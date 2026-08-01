@@ -5,21 +5,21 @@ import { Member, Plan, Coach, StaffUser, Payment } from '../types/electron'
 import { log } from '../lib/logger'
 import { useToast } from '../lib/toast'
 import { todayLocal, todayLocalOf } from '../lib/dates'
+import { notifyDataChanged, useDataVersion } from '../lib/data'
+import { getCurrencySymbol } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
+import MembersTable from './members/MembersTable'
+import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState } from './members/MemberFormModal'
+import NewPlanModal, { NewPlanData, NewPlanPayment } from './members/NewPlanModal'
+import { QrCodeModal, IdCardModal } from './members/MemberModals'
 
 // Payment methods that require a transaction reference number
 const METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card']
 
-interface FingerprintState {
-  scanning: boolean
-  captured: boolean
-  credentialId: string | null
-  error: string | null
-}
-
 function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser?: StaffUser | null; initialSearch?: string; onSearchConsumed?: () => void }) {
   const isAdmin = currentUser?.role === 'admin'
   const { showToast } = useToast()
+  const dataVersion = useDataVersion()
   const [members, setMembers] = useState<Member[]>([])
   // Full list used only for expiry computation (the table itself is paginated)
   const [allMembers, setAllMembers] = useState<Member[]>([])
@@ -41,11 +41,10 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     scanning: false,
     captured: false,
     credentialId: null,
-    error: null
+    error: null,
   })
   const [waiverAgreed, setWaiverAgreed] = useState(false)
   const [waiverAgreedAt, setWaiverAgreedAt] = useState<string | null>(null)
-  const [showWaiverModal, setShowWaiverModal] = useState(false)
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [shakeKey, setShakeKey] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -53,37 +52,37 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const planRef = useRef<HTMLSelectElement>(null)
   const waiverRef = useRef<HTMLDivElement>(null)
   const paymentRef = useRef<HTMLInputElement>(null)
+  const transactionRefRef = useRef<HTMLInputElement>(null)
   const [memberIdWarning, setMemberIdWarning] = useState<string | null>(null)
   const [checkingMemberId, setCheckingMemberId] = useState(false)
   const memberIdCheckTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const transactionRefRef = useRef<HTMLInputElement>(null)
-  const newPlanPlanRef = useRef<HTMLSelectElement>(null)
-  const newPlanPaymentRef = useRef<HTMLInputElement>(null)
-  const newPlanTxnRef = useRef<HTMLInputElement>(null)
-  const newPlanWaiverRef = useRef<HTMLDivElement>(null)
-  
+
   const [newPlanMember, setNewPlanMember] = useState<Member | null>(null)
   const [showNewPlanModal, setShowNewPlanModal] = useState(false)
-  const [newPlanData, setNewPlanData] = useState({
+  const [newPlanData, setNewPlanData] = useState<NewPlanData>({
     plan_id: 0,
     plan_start: '',
     plan_end: '',
   })
 
   // Payment recording state (create mode only)
-  const [paymentForm, setPaymentForm] = useState({
+  const [paymentForm, setPaymentForm] = useState<PaymentFormData>({
     amount: 0,
-    type: 'new_plan' as 'new_plan' | 'renewal' | 'top_up',
+    type: 'new_plan',
     payment_method: 'cash',
     transaction_ref: '',
   })
 
   // New Plan modal payment state (always visible & required)
-  const [newPlanPayment, setNewPlanPayment] = useState({
+  const [newPlanPayment, setNewPlanPayment] = useState<NewPlanPayment>({
     amount: 0,
     payment_method: 'cash',
     transaction_ref: '',
   })
+
+  // P2 5.2: auto-renew flags (new-plan modal + member form)
+  const [newPlanAutoRenew, setNewPlanAutoRenew] = useState(false)
+  const [formAutoRenew, setFormAutoRenew] = useState(false)
 
   // Last staff-entered numeric member ID (to suggest the next ID in the new-member form)
   const [lastMemberId, setLastMemberId] = useState<{ last: number; next: number }>({ last: 0, next: 1 })
@@ -92,7 +91,6 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   // Renewal waiver state
   const [renewWaiverAgreed, setRenewWaiverAgreed] = useState(false)
   const [renewWaiverAgreedAt, setRenewWaiverAgreedAt] = useState<string | null>(null)
-  const [renewShowWaiverModal, setRenewShowWaiverModal] = useState(false)
 
   // New Plan modal validation state
   const [newPlanValidationAttempted, setNewPlanValidationAttempted] = useState(false)
@@ -108,7 +106,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [memberPayments, setMemberPayments] = useState<Payment[]>([])
   const [paymentsLoading, setPaymentsLoading] = useState(false)
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<MemberFormData>({
     member_id: '',
     name: '',
     email: '',
@@ -125,8 +123,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     coaching_start: '',
     coaching_end: '',
     balance: 0,
-    status: 'active' as 'active' | 'inactive' | 'expired',
-    photo: ''
+    status: 'active',
+    photo: '',
   })
 
   useEffect(() => {
@@ -215,6 +213,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     }
   }
 
+  // P2 6.5: re-fetch whenever the data layer bumps (any page mutates data)
   useEffect(() => {
     loadMembers()
     // Full list is only needed for the expiring badge on the 'all' tab (the expiring tab fetches it directly)
@@ -222,7 +221,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       loadAllMembers()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, memberTab, memberPage])
+  }, [searchQuery, memberTab, memberPage, dataVersion])
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value)
@@ -296,63 +295,59 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   // Real WebAuthn fingerprint registration using Windows Hello
   const handleFingerprintScan = async () => {
     if (fingerprint.captured) return
-    
+
     setFingerprint({ scanning: true, captured: false, credentialId: null, error: null })
-    
+
     try {
-      // Generate a unique challenge for this registration
       const challenge = new Uint8Array(32)
       crypto.getRandomValues(challenge)
-      
-      // Generate a unique user ID
+
       const userId = new TextEncoder().encode(formData.member_id || generateMemberId())
-      
-      // Create WebAuthn credential - this triggers the real fingerprint scanner
+
       const credential = await navigator.credentials.create({
         publicKey: {
           challenge,
           rp: {
             name: 'REPCHECK Gym Check-In',
-            id: window.location.hostname || 'localhost'
+            id: window.location.hostname || 'localhost',
           },
           user: {
             id: userId,
             name: formData.email || formData.member_id || 'member',
-            displayName: formData.name || 'Member'
+            displayName: formData.name || 'Member',
           },
           pubKeyCredParams: [
             { alg: -7, type: 'public-key' },   // ES256
-            { alg: -257, type: 'public-key' }  // RS256
+            { alg: -257, type: 'public-key' }, // RS256
           ],
           authenticatorSelection: {
-            authenticatorAttachment: 'platform',  // Use built-in scanner
+            authenticatorAttachment: 'platform',
             userVerification: 'required',
-            residentKey: 'required'
+            residentKey: 'required',
           },
           timeout: 60000,
-          attestation: 'none'
-        }
+          attestation: 'none',
+        },
       }) as PublicKeyCredential | null
 
       if (credential) {
-        // Convert the credential ID to a hex string for storage
         const credentialIdArray = new Uint8Array(credential.rawId)
         const credentialIdHex = Array.from(credentialIdArray)
           .map(b => b.toString(16).padStart(2, '0'))
           .join('')
-        
+
         setFingerprint({
           scanning: false,
           captured: true,
           credentialId: credentialIdHex,
-          error: null
+          error: null,
         })
       } else {
         setFingerprint({
           scanning: false,
           captured: false,
           credentialId: null,
-          error: 'Registration cancelled'
+          error: 'Registration cancelled',
         })
       }
     } catch (error: any) {
@@ -361,7 +356,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         scanning: false,
         captured: false,
         credentialId: null,
-        error: error.message || 'Registration failed'
+        error: error.message || 'Registration failed',
       })
     }
   }
@@ -434,14 +429,14 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coaching_end: formData.coaching_end || undefined,
         balance: formData.balance || 0,
         waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
+        auto_renew: formAutoRenew ? 1 : 0,
       })
-      
+
       // Get the numeric ID of the newly created member
       const newNumericId = result?.lastInsertRowid ? Number(result.lastInsertRowid) : 0
-      
+
       // Save the fingerprint credential if captured
       if (fingerprint.captured && fingerprint.credentialId) {
-        // Store the WebAuthn credential ID associated with this member
         await window.electronAPI.saveFingerprintCredential(memberId, fingerprint.credentialId)
         if (newNumericId) log.registerFingerprint(newNumericId, formData.name)
       }
@@ -490,12 +485,11 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           }),
         })
       }
-      
+
       setShowForm(false)
       resetForm()
-      loadMembers()
-      loadAllMembers()
-      
+      notifyDataChanged()
+
       if (newNumericId) {
         log.createMember(newNumericId, formData.name)
       }
@@ -527,19 +521,18 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         status: formData.status,
         waiver_agreed_at: waiverAgreedAt || undefined,
       })
-      
+
       // Update fingerprint credential if newly captured
       if (fingerprint.captured && fingerprint.credentialId) {
         await window.electronAPI.saveFingerprintCredential(selectedMember.member_id, fingerprint.credentialId)
         log.registerFingerprint(selectedMember.id, formData.name)
       }
-      
+
       setShowForm(false)
       setSelectedMember(null)
       resetForm()
-      loadMembers()
-      loadAllMembers()
-      
+      notifyDataChanged()
+
       // Build changes object for logging — track all editable fields
       const changedFields: Record<string, any> = {}
       if (selectedMember.name !== formData.name) changedFields.name = formData.name
@@ -572,8 +565,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       await window.electronAPI.deleteMember(id)
       setDeleteTarget(null)
       setSelectedMember(null)
-      loadMembers()
-      loadAllMembers()
+      notifyDataChanged()
       if (member) {
         log.deleteMember(id, member.name)
       }
@@ -582,9 +574,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     }
   }
 
-  const getDefaultStartDate = () => {
-    return todayLocal()
-  }
+  const getDefaultStartDate = () => todayLocal()
 
   const getDefaultEndDate = () => {
     const d = new Date()
@@ -608,12 +598,12 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       height: '',
       weight: '',
       birthday: '',
-    coach_id: 0,
-    coaching_start: '',
-    coaching_end: '',
+      coach_id: 0,
+      coaching_start: '',
+      coaching_end: '',
       balance: 0,
       status: 'active',
-      photo: ''
+      photo: '',
     })
     setPhotoPreview(null)
     setFingerprint({ scanning: false, captured: false, credentialId: null, error: null })
@@ -622,6 +612,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setValidationAttempted(false)
     setShakeKey(0)
     setPaymentForm({ amount: 0, type: 'new_plan', payment_method: 'cash', transaction_ref: '' })
+    setFormAutoRenew(false)
   }
 
   const generateMemberId = () => {
@@ -646,10 +637,10 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       plan_end: finalEnd,
     })
     setNewPlanPayment({ amount: 0, payment_method: 'cash', transaction_ref: '' })
+    setNewPlanAutoRenew(!!member.auto_renew)
     // Initialize waiver state based on existing member waiver
     setRenewWaiverAgreed(!!member.waiver_agreed_at)
     setRenewWaiverAgreedAt(member.waiver_agreed_at || null)
-    setRenewShowWaiverModal(false)
     setShowNewPlanModal(true)
   }
 
@@ -670,15 +661,6 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     if (newPlanMissing.length > 0) {
       setNewPlanValidationAttempted(true)
       setNewPlanShakeKey(k => k + 1)
-      // Auto-scroll to the first missing required field
-      const targets: { el: HTMLElement | null }[] = [
-        { el: !newPlanData.plan_id ? newPlanPlanRef.current : null },
-        { el: !newPlanMember?.waiver_agreed_at && !renewWaiverAgreed ? newPlanWaiverRef.current : null },
-        { el: newPlanPayment.amount <= 0 ? newPlanPaymentRef.current : null },
-        { el: METHODS_REQUIRING_REF.includes(newPlanPayment.payment_method) && !newPlanPayment.transaction_ref.trim() ? newPlanTxnRef.current : null },
-      ]
-      const first = targets.find(t => t.el)?.el
-      first?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       return
     }
     setNewPlanValidationAttempted(false)
@@ -716,6 +698,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coaching_end: newPlanMember.coaching_end || undefined,
         balance: newBalance,
         status: newPlanMember.status,
+        auto_renew: newPlanAutoRenew ? 1 : 0,
         waiver_agreed_at: (!newPlanMember.waiver_agreed_at && renewWaiverAgreed && renewWaiverAgreedAt)
           ? renewWaiverAgreedAt
           : undefined,
@@ -746,9 +729,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
 
       setShowNewPlanModal(false)
       setNewPlanMember(null)
-      loadMembers()
-      loadAllMembers()
-      
+      notifyDataChanged()
+
       // Log the plan assignment
       const plan = plans.find(p => p.id === newPlanData.plan_id)
       log.assignPlan(newPlanMember.id, newPlanMember.name, plan?.name || `Plan #${newPlanData.plan_id}`)
@@ -777,11 +759,12 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       coaching_end: member.coaching_end || '',
       balance: member.balance || 0,
       status: member.status,
-      photo: member.photo || ''
+      photo: member.photo || '',
     })
     setPhotoPreview(member.photo || null)
     setWaiverAgreed(!!member.waiver_agreed_at)
     setWaiverAgreedAt(member.waiver_agreed_at || null)
+    setFormAutoRenew(!!member.auto_renew)
     setValidationAttempted(false)
     setShakeKey(0)
     setShowForm(true)
@@ -811,6 +794,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       if (result.success) {
         showToast('success', `Payment ${label}ed successfully.`)
         if (selectedMember) loadMemberPayments(selectedMember.id)
+        notifyDataChanged()
       } else {
         showToast('error', result.message || `Failed to ${label} payment.`)
       }
@@ -904,7 +888,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       <div class="card-info">
         <div class="row"><div class="lbl">Status</div><div class="val">${String(member.status).toUpperCase()}</div></div>
         ${member.plan_end ? `<div class="row"><div class="lbl">Valid Until</div><div class="val">${String(new Date(member.plan_end).toLocaleDateString()).replace(/</g, '&lt;')}</div></div>` : ''}
-        <div class="row"><div class="lbl">Balance</div><div class="val">₱${Number(member.balance || 0).toFixed(2)}</div></div>
+        <div class="row"><div class="lbl">Balance</div><div class="val">${getCurrencySymbol()}${Number(member.balance || 0).toFixed(2)}</div></div>
       </div>
       <div class="card-qr"><img src="${idCardQr}" alt="QR" /></div>
     </div>
@@ -1048,1280 +1032,132 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         </div>
       </div>
 
-      {/* Sub-tabs */}
-      <div className="member-tabs">
-        <button
-          className={`member-tab ${memberTab === 'all' ? 'active' : ''}`}
-          onClick={() => setMemberTab('all')}
-        >
-          All Members {totalMembers > 0 && <span className="expiring-badge">{totalMembers}</span>}
-        </button>
-        <button
-          className={`member-tab ${memberTab === 'expiring' ? 'active' : ''}`}
-          onClick={() => setMemberTab('expiring')}
-        >
-          Expiring Members {expiringMembers.length > 0 && <span className="expiring-badge">{expiringMembers.length}</span>}
-        </button>
-      </div>
-
-      {memberTab === 'all' && (
-      <div className="members-table-container">
-        <table className="members-table">
-          <thead>
-            <tr>
-              <th>Photo</th>
-              <th>Member ID</th>
-              <th>Member Since</th>
-              <th>Name</th>
-              <th>Plan</th>
-              <th>Status</th>
-              <th>Balance</th>
-              <th>Expiry</th>
-              <th>Days Left</th>
-              <th>Waiver</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="empty-row">No members found</td>
-              </tr>
-            ) : (
-              members.map((member) => (
-                <tr key={member.id} onClick={() => openEditForm(member)}>
-                  <td>
-                    {member.photo ? (
-                      <img src={member.photo} alt={member.name} className="member-table-photo" />
-                    ) : (
-                      <div className="member-table-avatar">{member.name.charAt(0)}</div>
-                    )}
-                  </td>
-                  <td className="mono-text">{member.member_id}</td>
-                  <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
-                  <td>{member.name}</td>
-                  <td>{getPlanName(member.plan_id)}</td>
-                  <td>
-                    <span className={`status-badge ${member.status}`}>
-                      {member.status}
-                    </span>
-                  </td>
-                  <td className="mono-text">₱{member.balance.toFixed(2)}</td>
-                  <td className="mono-text">
-                    {member.plan_end
-                      ? new Date(member.plan_end).toLocaleDateString()
-                      : 'N/A'}
-                  </td>
-                  <td className="mono-text">
-                    {(() => {
-                      const d = calcDaysRemaining(member.plan_end) ?? calcDaysRemaining(member.coaching_end)
-                      if (d === null || d === undefined) return '—'
-                      if (d <= 0) return <span className="status-badge expired">Expired</span>
-                      if (d <= 2) return <span className="days-left days-danger">{d} day{d !== 1 ? 's' : ''}</span>
-                      return <span className="days-left">{d} days</span>
-                    })()}
-                  </td>
-                  <td>
-                    {member.waiver_agreed_at ? (
-                      <span className="waiver-badge signed" title={`Signed ${new Date(member.waiver_agreed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>✓ Signed</span>
-                    ) : (
-                      <span className="waiver-badge unsigned">—</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="table-actions">
-                      <button
-                        className="btn-icon"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openIdCard(member)
-                        }}
-                        title="Member ID Card"
-                      >
-                        🪪
-                      </button>
-                      <button
-                        className="btn-icon"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openNewPlanModal(member)
-                        }}
-                        title="New Plan"
-                      >
-                        📋
-                      </button>
-                      {isAdmin && (
-                        <button
-                          className="btn-icon danger"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setDeleteTarget(member)
-                          }}
-                          title="Delete"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-      )}
-
-      {/* P1 4.2: pagination footer (all tab only) */}
-      {memberTab === 'all' && totalMembers > PAGE_SIZE && (
-        <div className="members-pagination">
-          <span className="pagination-info mono-text">
-            Showing {membersLoading ? '…' : (memberPage * PAGE_SIZE) + 1}–{Math.min((memberPage + 1) * PAGE_SIZE, totalMembers)} of {totalMembers}
-          </span>
-          <div className="pagination-actions">
-            <button
-              className="btn btn-secondary btn-sm"
-              disabled={memberPage === 0 || membersLoading}
-              onClick={() => setMemberPage(p => Math.max(0, p - 1))}
-            >
-              ← Prev
-            </button>
-            <button
-              className="btn btn-secondary btn-sm"
-              disabled={(memberPage + 1) * PAGE_SIZE >= totalMembers || membersLoading}
-              onClick={() => setMemberPage(p => p + 1)}
-            >
-              Next →
-            </button>
-          </div>
-        </div>
-      )}
-
-      {memberTab === 'expiring' && (
-        <div className="members-table-container">
-          <table className="members-table">
-            <thead>
-              <tr>
-                <th>Photo</th>
-                <th>Member ID</th>
-                <th>Member Since</th>
-                <th>Name</th>
-                <th>Plan</th>
-                <th>Expiry Date</th>
-                <th>Days Left</th>
-                <th>Status</th>
-                <th>Waiver</th>
-                <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {expiringMembers.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="empty-row">No expiring members</td>
-              </tr>
-            ) : (
-              expiringMembers.map((member) => {
-                  // Show whichever end date is expiring sooner
-                  const planDays = calcDaysRemaining(member.plan_end)
-                  const coachDays = calcDaysRemaining(member.coaching_end)
-                  const usePlan = (planDays ?? Infinity) <= (coachDays ?? Infinity)
-                  const daysLeft = usePlan ? (planDays ?? 0) : (coachDays ?? 0)
-                  const expiryDate = usePlan ? (member.plan_end || '') : (member.coaching_end || '')
-                  return (
-                    <tr key={member.id} onClick={() => openEditForm(member)}>
-                      <td>
-                        {member.photo ? (
-                          <img src={member.photo} alt={member.name} className="member-table-photo" />
-                        ) : (
-                          <div className="member-table-avatar">{member.name.charAt(0)}</div>
-                        )}
-                      </td>
-                      <td className="mono-text">{member.member_id}</td>
-                      <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
-                      <td>{member.name}</td>
-                      <td>{getPlanName(member.plan_id)}</td>
-                      <td className="mono-text">
-                        {expiryDate ? new Date(expiryDate).toLocaleDateString() : 'N/A'}
-                      </td>
-                      <td className="mono-text">
-                        {daysLeft <= 0 ? (
-                          <span className="status-badge expired">Expired</span>
-                        ) : daysLeft === 1 ? (
-                          <span className="days-left days-danger">{daysLeft} day</span>
-                        ) : (
-                          <span className="days-left days-warning">{daysLeft} days</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className={`status-badge ${member.status}`}>
-                          {member.status}
-                        </span>
-                      </td>
-                      <td>
-                        {member.waiver_agreed_at ? (
-                          <span className="waiver-badge signed" title={`Signed ${new Date(member.waiver_agreed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>✓ Signed</span>
-                        ) : (
-                          <span className="waiver-badge unsigned">—</span>
-                        )}
-                      </td>
-                      <td>
-                        <div className="table-actions">
-                          <button
-                            className="btn-icon"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleShowQr(member)
-                            }}
-                            title="Show QR Code"
-                          >
-                            ⬒
-                          </button>
-                          <button
-                            className="btn-icon"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              openNewPlanModal(member)
-                            }}
-                            title="New Plan"
-                          >
-                            📋
-                          </button>
-                          {isAdmin && (
-                            <button
-                              className="btn-icon danger"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteTarget(member)
-                              }}
-                              title="Delete"
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <MembersTable
+        memberTab={memberTab}
+        members={members}
+        expiringMembers={expiringMembers}
+        totalMembers={totalMembers}
+        memberPage={memberPage}
+        pageSize={PAGE_SIZE}
+        loading={membersLoading}
+        isAdmin={isAdmin}
+        getPlanName={getPlanName}
+        onTabChange={setMemberTab}
+        onPageChange={setMemberPage}
+        onOpenEdit={openEditForm}
+        onOpenIdCard={openIdCard}
+        onOpenNewPlan={openNewPlanModal}
+        onDelete={(m) => setDeleteTarget(m)}
+        onShowQr={handleShowQr}
+      />
 
       {/* New Plan Modal */}
       {showNewPlanModal && newPlanMember && (
-        <div className="modal-overlay">
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">New Plan — {newPlanMember.name}</h2>
-              <button className="btn-icon" onClick={() => setShowNewPlanModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-grid">
-                <div className="form-group">
-                  <label>Plan *</label>
-                  <select
-                    ref={newPlanPlanRef}
-                    className={`input ${newPlanValidationAttempted && newPlanData.plan_id === 0 ? 'input-required-missing' : ''}`}
-                    value={newPlanData.plan_id}
-                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_id: Number(e.target.value) })}
-                  >
-                    <option value={0}>— Select a plan —</option>
-                    {plans.map((plan) => (
-                      <option key={plan.id} value={plan.id}>
-                        {plan.name} (₱{plan.price})
-                      </option>
-                    ))}
-                  </select>
-                  {newPlanValidationAttempted && newPlanData.plan_id === 0 && (
-                    <span className="field-required-hint">⚠️ Select a plan</span>
-                  )}
-                </div>
-                <div className="form-group">
-                  <label>Plan Start</label>
-                  <input
-                    type="date"
-                    className="input"
-                    value={newPlanData.plan_start}
-                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_start: e.target.value })}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Plan End</label>
-                  <input
-                    type="date"
-                    className="input"
-                    value={newPlanData.plan_end}
-                    onChange={(e) => setNewPlanData({ ...newPlanData, plan_end: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              {/* ── Waiver Section (Renewal) ── */}
-              <div className="newplan-waiver-section">
-                <span className="section-label" style={{ margin: 0 }}>📄 Waiver Agreement</span>
-                <div ref={newPlanWaiverRef} className={`renew-waiver-box ${newPlanValidationAttempted && !newPlanMember.waiver_agreed_at && !renewWaiverAgreed ? 'enrollment-card-required' : ''}`}>
-                  {renewWaiverAgreed || newPlanMember?.waiver_agreed_at ? (
-                    <div className="renew-waiver-signed">
-                      <div className="waiver-success-icon" style={{ width: 36, height: 36, fontSize: 18 }}>✓</div>
-                      <span className="renew-waiver-status success">Waiver on File</span>
-                      <span className="renew-waiver-hint">
-                        {renewWaiverAgreedAt
-                          ? `Signed ${new Date(renewWaiverAgreedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                          : 'Waiver already on record'}
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setRenewShowWaiverModal(true)}
-                      >
-                        View Waiver
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="renew-waiver-pending">
-                      <div className="waiver-icon-large" style={{ fontSize: 24 }}>📄</div>
-                      <span className="renew-waiver-status">No waiver on file</span>
-                      <span className="renew-waiver-hint">
-                        Member must sign waiver before renewal
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        onClick={() => setRenewShowWaiverModal(true)}
-                      >
-                        View & Sign Waiver
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Payment section for new plan — required */}
-              <div className="newplan-payment-section">
-                <div className="newplan-payment-header">
-                  <span className="section-label" style={{ margin: 0 }}>💰 Payment <span className="req-badge">Required</span></span>
-                  <span className="newplan-balance mono-text">
-                    Current Balance: <strong className={newPlanMember.balance > 0 ? 'danger' : ''}>₱{(newPlanMember.balance || 0).toFixed(2)}</strong>
-                  </span>
-                </div>
-                <div className="payment-form newplan-payment-form">
-                  <div className="payment-form-grid">
-                    <div className="form-group">
-                      <label>Amount *</label>
-                      <input
-                        ref={newPlanPaymentRef}
-                        type="number"
-                        className={`input ${newPlanValidationAttempted && newPlanPayment.amount <= 0 ? 'input-required-missing' : ''}`}
-                        value={newPlanPayment.amount || ''}
-                        onChange={(e) => setNewPlanPayment({ ...newPlanPayment, amount: Number(e.target.value) })}
-                        placeholder="0.00"
-                        step="0.01"
-                        min="1"
-                      />
-                      {newPlanValidationAttempted && newPlanPayment.amount <= 0 && (
-                        <span className="field-required-hint">⚠️ Enter a payment amount</span>
-                      )}
-                    </div>
-                    <div className="form-group">
-                      <label>Payment Method</label>
-                      <select
-                        className="input"
-                        value={newPlanPayment.payment_method}
-                        onChange={(e) => setNewPlanPayment({ ...newPlanPayment, payment_method: e.target.value, transaction_ref: '' })}
-                      >
-                        <option value="cash">Cash</option>
-                        <option value="card">Card</option>
-                        <option value="gcash">GCash</option>
-                        <option value="maya">Maya</option>
-                        <option value="bank_transfer">Bank Transfer</option>
-                      </select>
-                    </div>
-                    {METHODS_REQUIRING_REF.includes(newPlanPayment.payment_method) && (
-                      <div className="form-group">
-                        <label>Transaction Number *</label>
-                        <input
-                          ref={newPlanTxnRef}
-                          type="text"
-                          className={`input ${newPlanValidationAttempted && !newPlanPayment.transaction_ref.trim() ? 'input-required-missing' : ''}`}
-                          value={newPlanPayment.transaction_ref}
-                          onChange={(e) => setNewPlanPayment({ ...newPlanPayment, transaction_ref: e.target.value })}
-                          placeholder="e.g. 1234567890"
-                        />
-                        {newPlanValidationAttempted && !newPlanPayment.transaction_ref.trim() && (
-                          <span className="field-required-hint">⚠️ Transaction number required for this method</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              {newPlanMissing.length > 0 ? (
-                <span key={newPlanShakeKey} className={`footer-required-note ${newPlanValidationAttempted ? 'flash' : ''}`}>
-                  ⚠️ Missing: {newPlanMissing.join(', ')}
-                </span>
-              ) : (
-                <span className="footer-required-note ok">✓ All required fields complete</span>
-              )}
-              <button className="btn btn-secondary" onClick={() => setShowNewPlanModal(false)}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleNewPlanSubmit}
-              >
-                Assign Plan
-              </button>
-            </div>
-          </div>
-        </div>
+        <NewPlanModal
+          member={newPlanMember}
+          plans={plans}
+          data={newPlanData}
+          payment={newPlanPayment}
+          waiverAgreed={renewWaiverAgreed}
+          waiverAgreedAt={renewWaiverAgreedAt}
+          validationAttempted={newPlanValidationAttempted}
+          shakeKey={newPlanShakeKey}
+          missing={newPlanMissing}
+          onDataChange={setNewPlanData}
+          onPaymentChange={setNewPlanPayment}
+          autoRenew={newPlanAutoRenew}
+          onAutoRenewChange={setNewPlanAutoRenew}
+          onWaiverAgree={() => {
+            setRenewWaiverAgreed(true)
+            const now = new Date().toISOString()
+            setRenewWaiverAgreedAt(now)
+            log.action({
+              action: 'waiver_signed',
+              entity_type: 'member',
+              details: JSON.stringify({ member_name: newPlanMember?.name || 'Member', agreed_at: now, context: 'renewal' }),
+            })
+          }}
+          onSubmit={handleNewPlanSubmit}
+          onCancel={() => {
+            setShowNewPlanModal(false)
+            setNewPlanMember(null)
+          }}
+        />
       )}
 
+      {/* Create / Edit Member Modal */}
       {showForm && (
-        <div className="modal-overlay">
-          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">
-                {selectedMember ? 'Edit Member' : 'New Member'}
-              </h2>
-              <button className="btn-icon" onClick={() => setShowForm(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="enrollment-layout">
-                {/* Photo and Fingerprint Section */}
-                <div className="enrollment-sidebar">
-                  {/* Photo Upload */}
-                  <div className="enrollment-card">
-                    <label className="section-label">Profile Photo</label>
-                    <div className="photo-container">
-                      {photoPreview ? (
-                        <img src={photoPreview} alt="Profile" className="photo-preview" />
-                      ) : (
-                        <div className="photo-placeholder">
-                          <span className="photo-icon">📷</span>
-                          <span>No photo</span>
-                        </div>
-                      )}
-                      <div className="photo-actions">
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={handleCameraCapture}>
-                          📸 Take Photo
-                        </button>
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => fileInputRef.current?.click()}>
-                          📁 Upload
-                        </button>
-                      </div>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handlePhotoUpload}
-                        style={{ display: 'none' }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Waiver Agreement */}
-                  <div ref={waiverRef} className={`enrollment-card ${!selectedMember && !waiverAgreed ? 'enrollment-card-required' : ''}`}>
-                    <label className="section-label">
-                      📄 Waiver Agreement{' '}
-                      {!selectedMember && <span className="req-badge">Required</span>}
-                    </label>
-                    <div className="waiver-container">
-                      {waiverAgreed || (selectedMember?.waiver_agreed_at) ? (
-                        <div className="waiver-signed">
-                          <div className="waiver-success-icon">✓</div>
-                          <span className="waiver-status success">Waiver Agreed & Signed</span>
-                          <span className="waiver-hint">
-                            {selectedMember?.waiver_agreed_at || waiverAgreedAt
-                              ? `Agreed and signed on ${new Date((selectedMember?.waiver_agreed_at || waiverAgreedAt)!).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                              : 'Member agreed to the terms'}
-                          </span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => setShowWaiverModal(true)}
-                          >
-                            {selectedMember ? 'View Waiver' : 'View Waiver'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="waiver-pending">
-                          <div className="waiver-icon-large">📄</div>
-                          <span className="waiver-status">
-                            {selectedMember ? 'No waiver on file' : 'Member must agree to waiver'}
-                          </span>
-                          <span className="waiver-hint">
-                            {selectedMember ? 'Waiver was not signed during enrollment' : 'Required — member must sign the waiver before they can be created'}
-                          </span>
-                          {!selectedMember && (
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-sm"
-                              onClick={() => setShowWaiverModal(true)}
-                            >
-                              View & Sign Waiver
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                {/* Fingerprint Registration - Real WebAuthn */}
-                  <div className="enrollment-card">
-                    <label className="section-label">Fingerprint Registration</label>
-                    <div className="fingerprint-container">
-                      {fingerprint.captured ? (
-                        <div className="fingerprint-captured">
-                          <div className="fingerprint-success-icon">✓</div>
-                          <span className="fingerprint-status success">Fingerprint Registered</span>
-                          <span className="fingerprint-hint">
-                            Using Windows Hello biometric authentication
-                          </span>
-                          <button type="button" className="btn btn-secondary btn-sm" onClick={handleRetakeFingerprint}>
-                            Retake
-                          </button>
-                        </div>
-                      ) : fingerprint.scanning ? (
-                        <div className="fingerprint-scanning">
-                          <div className="fingerprint-animation">
-                            <div className="scan-ring ring-1" />
-                            <div className="scan-ring ring-2" />
-                            <div className="scan-ring ring-3" />
-                            <div className="fingerprint-icon-pulse">👆</div>
-                          </div>
-                          <span className="fingerprint-status">Place your finger on the scanner...</span>
-                          <span className="fingerprint-hint">
-                            Windows Hello will prompt you to verify
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="fingerprint-idle">
-                          <div className="fingerprint-icon-large">👆</div>
-                          <span className="fingerprint-status">
-                            Register member's fingerprint
-                          </span>
-                          <span className="fingerprint-hint">
-                            Uses Windows Hello for secure biometric verification
-                          </span>
-                          {fingerprint.error && (
-                            <span className="fingerprint-error">{fingerprint.error}</span>
-                          )}
-                          <button type="button" className="btn btn-primary btn-sm" onClick={handleFingerprintScan}>
-                            🔍 Start Registration
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Basic Info Form */}
-                <div className="enrollment-form">
-                  <div className="member-form-card">
-                    <h3 className="section-label">👤 Personal Information</h3>
-                    <div className="form-grid">
-                    <div className="form-group">
-                      <label>Member ID</label>
-                      <div className="member-id-input-row">
-                        <input
-                          type="text"
-                          className={`input ${memberIdWarning ? 'input-warning' : ''}`}
-                          value={formData.member_id}
-                          onChange={(e) => handleMemberIdChange(e.target.value)}
-                          placeholder="Auto-generated if empty"
-                          disabled={!!selectedMember}
-                        />
-                        {!selectedMember && lastMemberIdLoaded && lastMemberId.last > 0 && !formData.member_id.trim() && (
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm member-id-suggest"
-                            onClick={() => handleMemberIdChange(String(lastMemberId.next))}
-                            title={`Last ID entered was ${lastMemberId.last}. Use the next number.`}
-                          >
-                            Use ID {lastMemberId.next}
-                          </button>
-                        )}
-                      </div>
-                      {!selectedMember && lastMemberIdLoaded && (
-                        <span className="member-id-hint">
-                          Last ID used: <strong>{lastMemberId.last || '—'}</strong>
-                          {lastMemberId.last > 0 && <> · Next suggested: <strong>{lastMemberId.next}</strong></>}
-                        </span>
-                      )}
-                      {checkingMemberId && <span className="member-id-checking">Checking...</span>}
-                      {memberIdWarning && (
-                        <span className="member-id-warning">{memberIdWarning}</span>
-                      )}
-                    </div>
-                    {selectedMember && (
-                      <div className="form-group">
-                        <label>Member Since</label>
-                        <input
-                          type="text"
-                          className="input"
-                          value={selectedMember.created_at ? new Date(selectedMember.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A'}
-                          disabled
-                          readOnly
-                        />
-                      </div>
-                    )}
-                    <div className="form-group">
-                      <label>Name *</label>
-                      <input
-                        type="text"
-                        className={`input ${!formData.name.trim() ? 'input-required-missing' : ''}`}
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="Full name"
-                        required
-                        ref={nameRef}
-                      />
-                      {!formData.name.trim() && (
-                        <span className="field-required-hint">⚠️ Name is required</span>
-                      )}
-                    </div>
-                    <div className="form-group">
-                      <label>Email</label>
-                      <input
-                        type="email"
-                        className="input"
-                        value={formData.email}
-                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                        placeholder="email@example.com"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Phone</label>
-                      <input
-                        type="tel"
-                        className="input"
-                        value={formData.phone}
-                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                        placeholder="+63 9XX XXX XXXX"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Emergency Contact</label>
-                      <input
-                        type="text"
-                        className="input"
-                        value={formData.emergency_contact}
-                        onChange={(e) => setFormData({ ...formData, emergency_contact: e.target.value })}
-                        placeholder="Contact name"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Emergency Phone</label>
-                      <input
-                        type="tel"
-                        className="input"
-                        value={formData.emergency_phone}
-                        onChange={(e) => setFormData({ ...formData, emergency_phone: e.target.value })}
-                        placeholder="+63 9XX XXX XXXX"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Birthday</label>
-                      <input
-                        type="date"
-                        className="input"
-                        value={formData.birthday}
-                        onChange={(e) => setFormData({ ...formData, birthday: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Height (cm)</label>
-                      <input
-                        type="number"
-                        className="input"
-                        value={formData.height}
-                        onChange={(e) => setFormData({ ...formData, height: e.target.value })}
-                        placeholder="e.g. 175"
-                        step="0.1"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Weight (kg)</label>
-                      <input
-                        type="number"
-                        className="input"
-                        value={formData.weight}
-                        onChange={(e) => setFormData({ ...formData, weight: e.target.value })}
-                        placeholder="e.g. 75"
-                        step="0.1"
-                      />
-                    </div>
-                    {selectedMember && (
-                      <div className="form-group">
-                        <label>Status</label>
-                        <select
-                          className="input"
-                          value={formData.status}
-                          onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                        >
-                          <option value="active">Active</option>
-                          <option value="inactive">Inactive</option>
-                          <option value="expired">Expired</option>
-                        </select>
-                      </div>
-                    )}
-
-                  </div>
-                  </div>
-                  {selectedMember && (
-                    <div className="member-form-card">
-                      <h3 className="section-label">💳 Payment History</h3>
-                      {paymentsLoading ? (
-                        <p className="payment-muted">Loading payments…</p>
-                      ) : memberPayments.length === 0 ? (
-                        <p className="payment-muted">No payments recorded for this member.</p>
-                      ) : (
-                        <div className="payment-history-table-wrap" style={{ maxHeight: 220, overflowY: 'auto' }}>
-                          <table className="payment-history-table">
-                            <thead>
-                              <tr>
-                                <th>Date</th>
-                                <th>Type</th>
-                                <th>Method</th>
-                                <th>Amount</th>
-                                <th>Status</th>
-                                <th></th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {memberPayments.map(pay => (
-                                <tr key={pay.id}>
-                                  <td className="mono-text">{new Date(pay.created_at).toLocaleDateString()}</td>
-                                  <td><span className={`type-tag type-${pay.type}`}>{pay.type}</span></td>
-                                  <td className="td-method">{pay.payment_method || '—'}</td>
-                                  <td className="td-amount mono-text">₱{Number(pay.amount).toFixed(2)}</td>
-                                  <td>
-                                    <span className={`pay-status ${pay.status || 'completed'}`}>
-                                      {pay.status || 'completed'}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    {(pay.status === 'completed' || !pay.status) && isAdmin && (
-                                      <div className="table-actions">
-                                        <button
-                                          className="btn-icon"
-                                          title="Refund payment"
-                                          onClick={() => handlePaymentStatus(pay, 'refunded')}
-                                        >↩️</button>
-                                        <button
-                                          className="btn-icon danger"
-                                          title="Void payment"
-                                          onClick={() => handlePaymentStatus(pay, 'voided')}
-                                        >✕</button>
-                                      </div>
-                                    )}
-                                    {pay.note && (
-                                      <span title={pay.note} style={{ cursor: 'help', color: 'var(--text-faint)' }}>ℹ️</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {!selectedMember && (
-                  <div className="member-form-card">
-                    <h3 className="section-label">📋 Membership Plan</h3>
-                    <div className="form-grid">
-                    <div className="form-group">
-                      <label>Plan *</label>
-                      <select
-                        ref={planRef}
-                        className={`input ${formData.plan_id === 0 ? 'input-required-missing' : ''}`}
-                        value={formData.plan_id}
-                        onChange={(e) => {
-                          const planId = Number(e.target.value)
-                          const plan = plans.find(p => p.id === planId)
-                          // Auto-set balance to plan price when creating a new member
-                          if (!selectedMember) {
-                            const prevPlan = plans.find(p => p.id === formData.plan_id)
-                            setFormData({ ...formData, plan_id: planId, balance: plan ? plan.price : 0 })
-                            // Auto-fill the payment amount with the plan price
-                            setPaymentForm((prev) => {
-                              // Switching to "No plan": clear an amount that was auto-filled
-                              if (planId === 0) {
-                                if (prevPlan && prev.amount === prevPlan.price) return { ...prev, amount: 0 }
-                                return prev
-                              }
-                              // Refresh the amount if it's still empty or still the previous plan's auto-filled price
-                              const wasAutoFilled = prevPlan ? prev.amount === prevPlan.price : false
-                              if (prev.amount <= 0 || wasAutoFilled) {
-                                return { ...prev, amount: plan ? plan.price : 0 }
-                              }
-                              return prev
-                            })
-                          } else {
-                            setFormData({ ...formData, plan_id: planId })
-                          }
-                        }}
-                      >
-                        <option value={0}>— Select a plan —</option>
-                        {plans.map((plan) => (
-                          <option key={plan.id} value={plan.id}>
-                            {plan.name} (₱{plan.price})
-                          </option>
-                        ))}
-                      </select>
-                      {formData.plan_id === 0 && (
-                        <span className="field-required-hint">⚠️ Select a plan</span>
-                      )}
-                    </div>
-                    <div className="form-group">
-                      <label>Balance</label>
-                      <input
-                        type="number"
-                        className="input"
-                        value={formData.balance}
-                        onChange={(e) => setFormData({ ...formData, balance: Number(e.target.value) })}
-                        step="0.01"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Plan Start</label>
-                      <input
-                        type="date"
-                        className="input"
-                        value={formData.plan_start}
-                        onChange={(e) => setFormData({ ...formData, plan_start: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Plan End</label>
-                      <input
-                        type="date"
-                        className="input"
-                        value={formData.plan_end}
-                        onChange={(e) => setFormData({ ...formData, plan_end: e.target.value })}
-                      />
-                    </div>
-
-                  </div>
-                  </div>
-                  )}
-                  {!selectedMember && (
-                  <div className="member-form-card">
-                    <h3 className="section-label">🏋️ Coaching</h3>
-                    <div className="form-grid">
-                    <div className="form-group">
-                      <label>Coach</label>
-                      <select
-                        className="input"
-                        value={formData.coach_id}
-                        onChange={(e) => {
-                          const cid = Number(e.target.value)
-                          setFormData({
-                            ...formData,
-                            coach_id: cid,
-                            coaching_start: cid > 0 ? formData.coaching_start : '',
-                            coaching_end: cid > 0 ? formData.coaching_end : '',
-                          })
-                        }}
-                      >
-                        <option value={0}>No coach</option>
-                        {coaches.map((coach) => (
-                          <option key={coach.id} value={coach.id}>
-                            {coach.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {formData.coach_id > 0 && (
-                      <div className="form-group">
-                        <label>Coaching Start</label>
-                        <input
-                          type="date"
-                          className="input"
-                          value={formData.coaching_start}
-                          onChange={(e) => setFormData({ ...formData, coaching_start: e.target.value })}
-                        />
-                      </div>
-                    )}
-                    {formData.coach_id > 0 && (
-                      <div className="form-group">
-                        <label>Coaching End</label>
-                        <input
-                          type="date"
-                          className="input"
-                          value={formData.coaching_end}
-                          onChange={(e) => setFormData({ ...formData, coaching_end: e.target.value })}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  </div>
-                  )}
-                </div>
-              </div>
-
-              {/* ── Payments Section (create mode only) — required ── */}
-              {!selectedMember && (
-                <div className="payment-section">
-                  <div className="payment-section-header">
-                    <h3 className="section-label" style={{ margin: 0 }}>
-                      💰 Payments <span className="req-badge">Required</span>
-                    </h3>
-                    <div className="payment-section-actions">
-                      <span className="payment-hint">A payment is required to create this member</span>
-                    </div>
-                  </div>
-
-                  {/* Required Payment Form */}
-                  <div className="payment-form">
-                    <div className="payment-form-grid">
-                      <div className="form-group">
-                        <label>Amount *</label>
-                      <input
-                        ref={paymentRef}
-                        type="number"
-                        className={`input ${paymentForm.amount <= 0 ? 'input-required-missing' : ''}`}
-                        value={paymentForm.amount || ''}
-                          onChange={(e) => setPaymentForm({ ...paymentForm, amount: Number(e.target.value) })}
-                          placeholder="0.00"
-                          step="0.01"
-                          min="1"
-                        />
-                        {paymentForm.amount <= 0 && (
-                          <span className="field-required-hint">⚠️ Enter a payment amount</span>
-                        )}
-                      </div>
-                      <div className="form-group">
-                        <label>Payment Type</label>
-                        <select
-                          className="input"
-                          value={paymentForm.type}
-                          onChange={(e) => setPaymentForm({ ...paymentForm, type: e.target.value as any })}
-                        >
-                          <option value="new_plan">New Plan</option>
-                          <option value="renewal">Renewal</option>
-                          <option value="top_up">Top Up</option>
-                        </select>
-                      </div>
-                      <div className="form-group">
-                        <label>Payment Method</label>
-                        <select
-                          className="input"
-                          value={paymentForm.payment_method}
-                          onChange={(e) => setPaymentForm({ ...paymentForm, payment_method: e.target.value, transaction_ref: '' })}
-                        >
-                          <option value="cash">Cash</option>
-                          <option value="card">Card</option>
-                          <option value="gcash">GCash</option>
-                          <option value="maya">Maya</option>
-                          <option value="bank_transfer">Bank Transfer</option>
-                        </select>
-                      </div>
-                      {METHODS_REQUIRING_REF.includes(paymentForm.payment_method) && (
-                        <div className="form-group">
-                          <label>Transaction Number *</label>
-                          <input
-                            ref={transactionRefRef}
-                            type="text"
-                            className={`input ${!paymentForm.transaction_ref.trim() ? 'input-required-missing' : ''}`}
-                            value={paymentForm.transaction_ref}
-                            onChange={(e) => setPaymentForm({ ...paymentForm, transaction_ref: e.target.value })}
-                            placeholder="e.g. 1234567890"
-                          />
-                          {!paymentForm.transaction_ref.trim() && (
-                            <span className="field-required-hint">⚠️ Transaction number required for this method</span>
-                          )}
-                        </div>
-                      )}
-                      <div className="form-group payment-form-actions">
-                        <label>&nbsp;</label>
-                        <div className="payment-btn-row">
-                          <span className="payment-create-note">
-                            Payment will be applied when you click "Create Member"
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              {missingRequired.length > 0 ? (
-                <span key={shakeKey} className={`footer-required-note ${validationAttempted ? 'flash' : ''}`}>
-                  ⚠️ Missing: {missingRequired.join(', ')}
-                </span>
-              ) : (
-                <span className="footer-required-note ok">✓ All required fields complete</span>
-              )}
-              <button className="btn btn-secondary" onClick={() => setShowForm(false)}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSubmitClick}
-              >
-                {selectedMember ? 'Save Changes' : 'Create Member'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <MemberFormModal
+          selectedMember={selectedMember}
+          plans={plans}
+          coaches={coaches}
+          formData={formData}
+          onFormDataChange={setFormData}
+          paymentForm={paymentForm}
+          onPaymentFormChange={setPaymentForm}
+          photoPreview={photoPreview}
+          fingerprint={fingerprint}
+          waiverAgreed={waiverAgreed}
+          waiverAgreedAt={waiverAgreedAt}
+          validationAttempted={validationAttempted}
+          shakeKey={shakeKey}
+          missingRequired={missingRequired}
+          memberIdWarning={memberIdWarning}
+          checkingMemberId={checkingMemberId}
+          lastMemberId={lastMemberId}
+          lastMemberIdLoaded={lastMemberIdLoaded}
+          memberPayments={memberPayments}
+          paymentsLoading={paymentsLoading}
+          isAdmin={isAdmin}
+          autoRenew={formAutoRenew}
+          onAutoRenewChange={setFormAutoRenew}
+          refs={{ fileInputRef, nameRef, planRef, waiverRef, paymentRef, transactionRefRef }}
+          onMemberIdChange={handleMemberIdChange}
+          onPhotoUpload={handlePhotoUpload}
+          onCameraCapture={handleCameraCapture}
+          onFingerprintScan={handleFingerprintScan}
+          onRetakeFingerprint={handleRetakeFingerprint}
+          onPaymentStatus={handlePaymentStatus}
+          onWaiverAgree={() => {
+            setWaiverAgreed(true)
+            const now = new Date().toISOString()
+            setWaiverAgreedAt(now)
+            log.action({
+              action: 'waiver_signed',
+              entity_type: 'member',
+              details: JSON.stringify({ member_name: formData.name || 'New Member', agreed_at: now }),
+            })
+          }}
+          onSubmit={handleSubmitClick}
+          onClose={() => {
+            setShowForm(false)
+            setSelectedMember(null)
+          }}
+        />
       )}
 
-      {/* ── QR Code Modal ── */}
+      {/* QR Code Modal */}
       {qrMember && (
-        <div className="modal-overlay" onClick={() => setQrMember(null)}>
-          <div className="modal qr-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">⬒ Member QR Code</h2>
-              <button className="btn-icon" onClick={() => setQrMember(null)}>✕</button>
-            </div>
-            <div className="modal-body qr-modal-body">
-              <div className="qr-member-info">
-                <span className="qr-member-name">{qrMember.name}</span>
-                <span className="mono-text qr-member-id">ID: {qrMember.member_id}</span>
-                <span className={`status-badge ${qrMember.status}`}>{qrMember.status}</span>
-              </div>
-              <div className="qr-code-container">
-                {qrCodeUrl ? (
-                  <img src={qrCodeUrl} alt={`QR for ${qrMember.member_id}`} className="qr-code-img" />
-                ) : (
-                  <div className="qr-loading">{qrError || 'Generating...'}</div>
-                )}
-              </div>
-              <p className="qr-hint">
-                Show this code at the kiosk and tap <strong>📷 Scan QR Code</strong> to check in.
-              </p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setQrMember(null)}>Close</button>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  // Open a dedicated print window so we never print the whole app
-                  if (!qrCodeUrl || !qrMember) return
-                  const win = window.open('', '_blank', 'width=400,height=520')
-                  if (!win) {
-                    alert('Please allow pop-ups to print the QR code.')
-                    return
-                  }
-                  const escHtml = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-                  win.document.write(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>QR — ${escHtml(qrMember.member_id)}</title>
-<style>
-  body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; padding: 24px; }
-  .qr { margin: 20px auto; }
-  .name { font-size: 16px; font-weight: 700; }
-  .id { font-size: 13px; color: #555; margin-top: 4px; }
-</style></head><body>
-  <div class="name">${escHtml(qrMember.name)}</div>
-  <div class="id">ID: ${escHtml(qrMember.member_id)}</div>
-  <img class="qr" src="${qrCodeUrl}" width="280" height="280" alt="QR" />
-  <div class="id">Scan at the front-desk kiosk to check in</div>
-  <script>window.onload = () => window.print()</script>
-</body></html>`)
-                  win.document.close()
-                  win.focus()
-                }}
-                disabled={!qrCodeUrl}
-              >
-                🖨️ Print
-              </button>
-            </div>
-          </div>
-        </div>
+        <QrCodeModal
+          member={qrMember}
+          qrCodeUrl={qrCodeUrl}
+          qrError={qrError}
+          onClose={() => setQrMember(null)}
+        />
       )}
 
-      {/* Renewal Waiver Modal */}
-      {renewShowWaiverModal && (
-        <div className="modal-overlay" onClick={() => setRenewShowWaiverModal(false)}>
-          <div className="modal waiver-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">📄 Membership Waiver & Release</h2>
-              <button className="btn-icon" onClick={() => setRenewShowWaiverModal(false)}>✕</button>
-            </div>
-            <div className="modal-body waiver-modal-body">
-              <div className="waiver-content">
-                <h3>ASSUMPTION OF RISK AND RELEASE OF LIABILITY</h3>
-                
-                <p>I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.</p>
-
-                <h4>1. ASSUMPTION OF RISK</h4>
-                <p>I acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.</p>
-
-                <h4>2. MEDICAL CLEARANCE</h4>
-                <p>I represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.</p>
-
-                <h4>3. RELEASE OF LIABILITY</h4>
-                <p>I hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.</p>
-
-                <h4>4. USE OF FACILITIES</h4>
-                <p>I agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.</p>
-
-                <h4>5. PHOTOGRAPHY AND MARKETING</h4>
-                <p>I grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.</p>
-
-                <hr />
-
-                <p className="waiver-agreement-text">
-                  By clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.
-                </p>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setRenewShowWaiverModal(false)}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  setRenewWaiverAgreed(true)
-                  setRenewShowWaiverModal(false)
-                  const now = new Date().toISOString()
-                  setRenewWaiverAgreedAt(now)
-                  log.action({
-                    action: 'waiver_signed',
-                    entity_type: 'member',
-                    details: JSON.stringify({ member_name: newPlanMember?.name || 'Member', agreed_at: now, context: 'renewal' }),
-                  })
-                }}
-              >
-                I Agree
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Member Waiver Modal */}
-      {showWaiverModal && (
-        <div className="modal-overlay" onClick={() => setShowWaiverModal(false)}>
-          <div className="modal waiver-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">📄 Membership Waiver & Release</h2>
-              <button className="btn-icon" onClick={() => setShowWaiverModal(false)}>✕</button>
-            </div>
-            <div className="modal-body waiver-modal-body">
-              <div className="waiver-content">
-                <h3>ASSUMPTION OF RISK AND RELEASE OF LIABILITY</h3>
-                
-                <p>I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.</p>
-
-                <h4>1. ASSUMPTION OF RISK</h4>
-                <p>I acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.</p>
-
-                <h4>2. MEDICAL CLEARANCE</h4>
-                <p>I represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.</p>
-
-                <h4>3. RELEASE OF LIABILITY</h4>
-                <p>I hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.</p>
-
-                <h4>4. USE OF FACILITIES</h4>
-                <p>I agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.</p>
-
-                <h4>5. PHOTOGRAPHY AND MARKETING</h4>
-                <p>I grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.</p>
-
-                <hr />
-
-                <p className="waiver-agreement-text">
-                  By clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.
-                </p>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowWaiverModal(false)}>
-                Cancel
-              </button>
-              {!selectedMember && (
-                <button
-                  className="btn btn-primary"
-                  onClick={() => {
-                    setWaiverAgreed(true)
-                    setShowWaiverModal(false)
-                    const now = new Date().toISOString()
-                    setWaiverAgreedAt(now)
-                    log.action({
-                      action: 'waiver_signed',
-                      entity_type: 'member',
-                      details: JSON.stringify({ member_name: formData.name || 'New Member', agreed_at: now }),
-                    })
-                  }}
-                >
-                  I Agree
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* P2 5.1: Member ID card modal */}
+      {/* Member ID card modal */}
       {idCardMember && (
-        <div className="modal-overlay" onClick={() => setIdCardMember(null)}>
-          <div className="modal id-card-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="display-text">🪪 Member ID Card</h2>
-              <button className="btn-icon" onClick={() => setIdCardMember(null)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="id-card-preview">
-                <div className="id-card-front">
-                  <div className="id-card-top">
-                    <span className="id-card-brand display-text">REPCHECK</span>
-                    <span className="id-card-code mono-text">{idCardMember.member_id}</span>
-                  </div>
-                  <div className="id-card-photo-row">
-                    {idCardMember.photo ? (
-                      <img src={idCardMember.photo} alt={idCardMember.name} className="id-card-photo" />
-                    ) : (
-                      <div className="id-card-photo-placeholder">{idCardMember.name.charAt(0).toUpperCase()}</div>
-                    )}
-                    <div className="id-card-details">
-                      <span className="id-card-name">{idCardMember.name}</span>
-                      <span className="id-card-plan">{idCardMember.plan_name || 'No Plan'}</span>
-                      <span className={`status-badge ${idCardMember.status}`}>{idCardMember.status}</span>
-                    </div>
-                  </div>
-                  <div className="id-card-meta">
-                    <div>
-                      <span className="id-card-label">Valid Until</span>
-                      <span className="id-card-value">{idCardMember.plan_end ? new Date(idCardMember.plan_end).toLocaleDateString() : 'N/A'}</span>
-                    </div>
-                    <div>
-                      <span className="id-card-label">Balance</span>
-                      <span className="id-card-value">₱{(idCardMember.balance || 0).toFixed(2)}</span>
-                    </div>
-                    <div>
-                      <span className="id-card-label">Coach</span>
-                      <span className="id-card-value">{idCardMember.coach_name || '—'}</span>
-                    </div>
-                  </div>
-                </div>
-                {idCardQr ? (
-                  <img src={idCardQr} alt="QR" className="id-card-qr" />
-                ) : (
-                  <div className="id-card-qr-loading">Generating QR…</div>
-                )}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setIdCardMember(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handlePrintIdCard} disabled={idCardPrinting || !idCardQr}>
-                {idCardPrinting ? 'Printing…' : '🖨️ Print ID Card'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <IdCardModal
+          member={idCardMember}
+          idCardQr={idCardQr}
+          printing={idCardPrinting}
+          onPrint={handlePrintIdCard}
+          onClose={() => setIdCardMember(null)}
+        />
       )}
 
-      {/* P2 5.7: destructive-action confirmation via ConfirmModal */}
+      {/* Destructive-action confirmation via ConfirmModal */}
       <ConfirmModal
         open={!!deleteTarget}
         title="Delete Member"

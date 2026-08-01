@@ -89,7 +89,7 @@ export interface ElectronAPI {
 
   // Backup & Restore
   createBackup: () => Promise<{ success: boolean; path?: string; reason?: string }>
-  restoreBackup: () => Promise<{ success: boolean; reason?: string }>
+  restoreBackup: (password?: string) => Promise<{ success: boolean; reason?: string; message?: string }>
 
   // Kiosk window
   openKioskWindow: () => Promise<void>
@@ -164,6 +164,7 @@ export interface Member {
   status: 'active' | 'inactive' | 'expired'
   created_at: string
   waiver_agreed_at?: string
+  auto_renew?: number
   plan_name?: string
   coach_name?: string
   plan_type?: string
@@ -189,6 +190,7 @@ export interface CreateMemberInput {
   coaching_end?: string
   balance?: number
   waiver_agreed_at?: string
+  auto_renew?: number
 }
 
 export interface UpdateMemberInput {
@@ -211,6 +213,7 @@ export interface UpdateMemberInput {
   status?: 'active' | 'inactive' | 'expired'
   waiver_agreed_at?: string
   sessions_used?: number
+  auto_renew?: number
 }
 
 export interface Plan {

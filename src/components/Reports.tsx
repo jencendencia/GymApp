@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import './Reports.css'
 import { DailyReport, MonthlyReport } from '../types/electron'
 import { todayLocal, todayLocalOf } from '../lib/dates'
+import { getCurrencySymbol } from '../lib/format'
 
 interface EmailResult {
   success: boolean
@@ -109,7 +110,7 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
   }
 
   // ── Format helpers ──
-  const fmtCurrency = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtCurrency = (n: number) => `${getCurrencySymbol()}${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
   const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 
@@ -874,7 +875,7 @@ ${buildTable(
     <tr><td>Plan</td><td>${escReceipt(t.plan_name || '—')}</td></tr>
     <tr><td>Type</td><td>${escReceipt(t.type.replace(/_/g, ' '))}</td></tr>
     <tr><td>Method</td><td>${escReceipt((t.payment_method || 'cash').replace(/_/g, ' '))}</td></tr>
-    <tr><td class="amt">TOTAL</td><td class="amt">₱${t.amount.toFixed(2)}</td></tr>
+    <tr><td class="amt">TOTAL</td><td class="amt">${getCurrencySymbol()}${t.amount.toFixed(2)}</td></tr>
   </table>
   <div class="line"></div>
   <div class="center">Thank you!</div>

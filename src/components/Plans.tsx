@@ -2,10 +2,13 @@ import React, { useState, useEffect } from 'react'
 import './Plans.css'
 import { Plan, StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
+import { notifyDataChanged, useDataVersion } from '../lib/data'
+import { formatMoney } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
 
 function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const isAdmin = currentUser?.role === 'admin'
+  const dataVersion = useDataVersion()
   const [plans, setPlans] = useState<Plan[]>([])
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
@@ -20,7 +23,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
 
   useEffect(() => {
     loadPlans()
-  }, [])
+  }, [dataVersion])
 
   const loadPlans = async () => {
     try {
@@ -36,7 +39,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       const result = await window.electronAPI.createPlan(formData)
       setShowForm(false)
       resetForm()
-      loadPlans()
+      notifyDataChanged()
       log.createPlan(result.lastInsertRowid as number, formData.name, formData.price)
     } catch (error) {
       console.error('Failed to create plan:', error)
@@ -50,7 +53,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       setShowForm(false)
       setSelectedPlan(null)
       resetForm()
-      loadPlans()
+      notifyDataChanged()
       
       // Build changes object
       const changedFields: Record<string, any> = {}
@@ -70,7 +73,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       const plan = plans.find(p => p.id === id)
       await window.electronAPI.deletePlan(id)
       setDeleteTarget(null)
-      loadPlans()
+      notifyDataChanged()
       if (plan) {
         log.deletePlan(id, plan.name)
       }
@@ -144,7 +147,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                 )}
               </div>
               <h3 className="plan-name display-text">{plan.name}</h3>
-              <div className="plan-price mono-text">₱{plan.price.toFixed(2)}</div>
+              <div className="plan-price mono-text">{formatMoney(plan.price)}</div>
               <div className="plan-details">
                 {plan.duration_days && (
                   <span>{plan.duration_days} days</span>

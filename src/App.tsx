@@ -18,6 +18,8 @@ import { Member, TodayStats, Checkin, StaffUser } from './types/electron'
 import GlobalSearch from './components/GlobalSearch'
 import { setLogUser } from './lib/logger'
 import { todayLocal } from './lib/dates'
+import { setCurrencySymbol } from './lib/format'
+import { useDataVersion } from './lib/data'
 
 type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings' | 'users'
 
@@ -48,6 +50,8 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [showGlobalSearch, setShowGlobalSearch] = useState(false)
   const [membersSearchQuery, setMembersSearchQuery] = useState('')
+  // P2 6.5: data-layer change events — bump so the dashboard stats auto-refresh
+  const dataVersion = useDataVersion()
 
   // P2 5.7: apply the persisted theme (dark/light) to the document root
   useEffect(() => {
@@ -61,15 +65,28 @@ function App() {
     })()
   }, [])
 
+  // P2 5.7: load the persisted currency symbol so every page formats money consistently
+  useEffect(() => {
+    (async () => {
+      try {
+        const currency = await window.electronAPI.getSetting('currency')
+        setCurrencySymbol(currency)
+      } catch {
+        setCurrencySymbol('₱')
+      }
+    })()
+  }, [])
+
+  // Mount-only: activation check, branding, and the clock ticker
   useEffect(() => {
     checkActivation()
     loadAppName()
     loadAppLogo()
-    loadData()
     const interval = setInterval(() => {
       setCurrentTime(new Date())
     }, 1000)
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleLogin = (user: StaffUser) => {
@@ -134,6 +151,11 @@ function App() {
       console.error('Failed to load data:', error)
     }
   }, [])
+
+  // P2 6.5: re-fetch dashboard data whenever the data layer bumps
+  useEffect(() => {
+    loadData()
+  }, [dataVersion, loadData])
 
   const handleMinimize = () => window.electronAPI.minimizeWindow()
   const handleMaximize = () => window.electronAPI.maximizeWindow()

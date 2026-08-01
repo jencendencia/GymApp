@@ -70,7 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Backup & Restore
   createBackup: () => ipcRenderer.invoke('create-backup'),
-  restoreBackup: () => ipcRenderer.invoke('restore-backup'),
+  restoreBackup: (password?: string) => ipcRenderer.invoke('restore-backup', password),
 
   // Coaches
   getCoaches: () => ipcRenderer.invoke('get-coaches'),
