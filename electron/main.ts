@@ -14,6 +14,13 @@ let mainWindow: BrowserWindow | null = null
 let kioskWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
 
+// ── App icon ──
+// Resolve the icon path for the window/taskbar. Works in dev (project root) and
+// in the packaged app where Repcheck_icon.png is bundled at the app root.
+function appIconPath(): string {
+  return path.join(__dirname, '../Repcheck_icon.png')
+}
+
 // ── Password hashing (scrypt with per-user salt) ──
 const SCRYPT_KEYLEN = 64
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 }
@@ -499,6 +506,7 @@ function createWindow() {
     minWidth: 1200,
     minHeight: 700,
     title: 'REPCHECK',
+    icon: appIconPath(),
     backgroundColor: '#101215',
     webPreferences: {
       nodeIntegration: false,
@@ -548,6 +556,7 @@ function createKioskWindow() {
     frame: false,
     resizable: false,
     alwaysOnTop: false,
+    icon: appIconPath(),
     backgroundColor: '#101215',
     show: false,
     webPreferences: {
