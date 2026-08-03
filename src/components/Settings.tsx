@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
-import { StaffUser } from '../types/electron'
+import { StaffUser, FingerprintStatus } from '../types/electron'
 import { log } from '../lib/logger'
 import ConfirmModal from './ConfirmModal'
 
@@ -80,6 +80,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     theme: 'dark',
   })
   const [saved, setSaved] = useState(false)
+  const [scannerChecking, setScannerChecking] = useState(false)
+  const [scannerStatus, setScannerStatus] = useState<FingerprintStatus | null>(null)
   const [smtpProvider, setSmtpProvider] = useState('')
   const [smtpTestResult, setSmtpTestResult] = useState<BannerState>({ type: 'none' })
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
@@ -133,6 +135,23 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.theme) setSettings(prev => ({ ...prev, theme: data.theme === 'light' ? 'light' : 'dark' }))
     } catch (error) {
       console.error('Failed to load settings:', error)
+    }
+  }
+
+  // Live scanner status from the native U.are.U SDK (worker thread)
+  const handleCheckScanner = async () => {
+    setScannerChecking(true)
+    try {
+      const status = await window.electronAPI.getFingerprintStatus()
+      setScannerStatus(status)
+    } catch (error: any) {
+      setScannerStatus({
+        available: false,
+        readerName: '',
+        steps: [{ name: 'Scanner', ok: false, message: error?.message || 'Failed to query the fingerprint scanner.' }],
+      })
+    } finally {
+      setScannerChecking(false)
     }
   }
 
@@ -490,24 +509,52 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
 
           </div>
 
-          {/* U.R.U. 4500 setup info */}
+          {/* U.R.U. 4500 setup info + live scanner status */}
           <div style={{ marginTop: 12, padding: '14px 18px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
             <strong style={{ color: 'var(--accent)' }}>🖐️ Digital Persona U.R.U. 4500</strong>
             <p style={{ margin: '6px 0 0' }}>
-              This app supports the <strong>U.R.U. 4500</strong> fingerprint reader via <strong>Windows Hello</strong>.
-              To set it up:
+              The app captures fingerprints <strong>directly from the U.R.U. 4500 reader</strong> using the
+              DigitalPersona U.are.U SDK — no Windows Hello, no passkeys, and no limit on how many members can enroll.
             </p>
             <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
               <li>Plug in the U.R.U. 4500 via USB</li>
-              <li>Download and install the{' '}
-                <a href="https://www.hidglobal.com/drivers/46502" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
-                  WBF Driver
-                </a>
-                {' '}from HID Global</li>
-              <li>Go to <strong>Windows Settings → Accounts → Sign-in options → Fingerprint</strong></li>
-              <li>Click <strong>Set up</strong> and register your fingerprint with Windows Hello</li>
-              <li>Once enrolled, the <strong>Kiosk check-in</strong> and <strong>Member registration</strong> will automatically use the scanner</li>
+              <li>Install the DigitalPersona U.are.U SDK (the reader's <strong>dpfpdd.dll / dpfj.dll</strong>) — the
+                one-time setup registers the SDK on this PC; see the HID Global download page</li>
+              <li>If the DLLs aren't in the system path, drop them in a <strong>"bin" folder</strong> next to the app</li>
+              <li>Back in the app, click <strong>Check Scanner</strong> below — it should report the reader as detected</li>
+              <li>Enroll members under <strong>Members → Add Member → Fingerprint Registration</strong>, and the
+                <strong>Kiosk</strong> will match them by fingerprint automatically</li>
             </ol>
+            <p style={{ margin: '8px 0 0' }}>
+              ℹ️ <strong>Note:</strong> the U.are.U driver replaces the Windows Hello (WBF) driver on the reader —
+              fingerprints enrolled through Windows Hello won't carry over; re-enroll members once after installing.
+            </p>
+            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleCheckScanner}
+                disabled={scannerChecking}
+              >
+                {scannerChecking ? '⏳ Checking...' : '🔍 Check Scanner'}
+              </button>
+              {scannerStatus && (
+                <span style={{ fontSize: 12, fontWeight: 600, color: scannerStatus.available ? 'var(--accent)' : 'var(--warn)' }}>
+                  {scannerStatus.available
+                    ? `✅ ${scannerStatus.readerName || 'Fingerprint reader'} detected`
+                    : '⚠️ Scanner not ready'}
+                </span>
+              )}
+            </div>
+            {scannerStatus && !scannerStatus.available && (
+              <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: 'var(--text-muted)' }}>
+                {scannerStatus.steps.filter(s => !s.ok).map((s, i) => (
+                  <li key={i}>
+                    <strong>{s.name}:</strong> {s.message}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
 

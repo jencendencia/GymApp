@@ -341,28 +341,35 @@ body {
   height: 100vh;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 60px 40px;
-  overflow-y: auto;
+  /* Content is centered via .kiosk-screens { margin: auto } — never with
+     justify-content, which combined with overflow can clip/jiggle content. */
+  justify-content: flex-start;
+  /* No scrolling: every kiosk element must fit on the one screen, so the whole
+     layout scales with the viewport height (see the vh clamps below). No top
+     padding either — the idle logo is meant to start flush at the very top of
+     the frameless kiosk window (the bottom card floats with its own offset). */
+  padding: 0 40px;
+  overflow: hidden;
 }
 
-/* Larger touch-friendly sizing in kiosk mode */
+/* Larger touch-friendly sizing in kiosk mode — all capped with vh so the idle
+   screen always fits on one non-scrollable screen regardless of monitor size. */
 .app-kiosk-mode .kiosk-title {
-  font-size: 42px;
+  font-size: min(42px, 4.2vh);
 }
 
 .app-kiosk-mode .kiosk-subtitle {
-  font-size: 18px;
+  font-size: min(18px, 2.1vh);
 }
 
 .app-kiosk-mode .radar-container {
-  width: 260px;
-  height: 260px;
+  width: min(260px, 22vh);
+  height: min(260px, 22vh);
 }
 
 .app-kiosk-mode .fingerprint-icon svg {
-  width: 64px;
-  height: 64px;
+  width: min(64px, 6vh);
+  height: min(64px, 6vh);
 }
 
 .app-kiosk-mode .profile-card {
@@ -381,7 +388,7 @@ body {
 }
 
 .app-kiosk-mode .kiosk-manual-link {
-  font-size: 16px;
+  font-size: min(16px, 1.9vh);
 }
 
 .app-kiosk-mode .manual-search-box {
@@ -389,13 +396,13 @@ body {
 }
 
 .app-kiosk-mode .manual-search-box .input {
-  font-size: 18px;
-  padding: 14px 18px;
+  font-size: min(18px, 2.2vh);
+  padding: min(12px, 1.6vh) 18px;
 }
 
 .app-kiosk-mode .manual-search-box .btn {
-  font-size: 16px;
-  padding: 14px 28px;
+  font-size: min(16px, 2vh);
+  padding: min(12px, 1.6vh) 24px;
 }
 
 .app-kiosk-mode .kiosk-profile {

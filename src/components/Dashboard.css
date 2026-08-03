@@ -34,6 +34,77 @@
   gap: 16px;
 }
 
+/* Kiosk status indicator on the Open Kiosk button */
+.dash-kiosk-btn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint, #5a5d6a);
+  flex-shrink: 0;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.dash-kiosk-btn-dot.open {
+  background: var(--accent, #58cc7c);
+  box-shadow: 0 0 0 0 rgba(88, 204, 124, 0.6);
+  animation: dash-kiosk-dot-pulse 2s ease-out infinite;
+}
+
+.dash-kiosk-btn.kiosk-open {
+  border-color: rgba(88, 204, 124, 0.35);
+  color: var(--accent, #58cc7c);
+}
+
+@keyframes dash-kiosk-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(88, 204, 124, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(88, 204, 124, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(88, 204, 124, 0);
+  }
+}
+
+/* Open Kiosk button */
+.dash-kiosk-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface, #1e2028);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 10px;
+  color: var(--text-muted, #8b8fa3);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+
+.dash-kiosk-btn svg {
+  flex-shrink: 0;
+}
+
+.dash-kiosk-btn:hover:not(:disabled) {
+  border-color: var(--accent, #58cc7c);
+  color: var(--accent, #58cc7c);
+  background: rgba(88, 204, 124, 0.06);
+  box-shadow: 0 0 0 1px rgba(88, 204, 124, 0.15), 0 4px 16px rgba(0, 0, 0, 0.2);
+  transform: translateY(-1px);
+}
+
+.dash-kiosk-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.dash-kiosk-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .dashboard-time-badge {
   display: flex;
   flex-direction: column;
@@ -55,10 +126,10 @@
   line-height: 1;
 }
 
-/* Stats Cards Row */
+/* Stats Cards Row — auto-fit so the 5 cards wrap gracefully on narrow windows */
 .dashboard-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 16px;
 }
 
@@ -117,6 +188,11 @@
 .dash-stat-icon.expired-icon {
   background: rgba(255, 77, 77, 0.08);
   color: var(--danger, #ff4d4d);
+}
+
+.dash-stat-icon.guest-icon {
+  background: rgba(77, 168, 255, 0.1);
+  color: var(--info, #4da8ff);
 }
 
 .dash-stat-badge {
@@ -266,6 +342,50 @@
   background: var(--surface-2, #252830);
 }
 
+/* New check-in pulse (P2 6.5): subtle 'just now' flash when a member checks in */
+.dash-active-item.just-now {
+  animation: dash-just-in 1.2s ease-out 3;
+}
+
+.dash-active-item.just-now .dash-active-dot {
+  animation: dash-dot-pulse 0.9s ease-out 3;
+}
+
+.just-now-badge {
+  margin-left: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent, #58cc7c);
+  opacity: 0;
+  animation: dash-badge-in 0.3s ease-out forwards;
+}
+
+@keyframes dash-just-in {
+  0% {
+    background: rgba(88, 204, 124, 0.22);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes dash-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(88, 204, 124, 0.7);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(88, 204, 124, 0);
+  }
+}
+
+@keyframes dash-badge-in {
+  to {
+    opacity: 1;
+  }
+}
+
 .dash-active-avatar {
   width: 36px;
   height: 36px;
@@ -371,6 +491,122 @@
 
 .dash-expiring-days.urgent {
   color: var(--danger, #ff4d4d);
+}
+
+/* Today's Guests list */
+.dash-guest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dash-guest-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.dash-guest-item:hover {
+  background: var(--surface-2, #252830);
+}
+
+.dash-guest-avatar {
+  width: 36px;
+  height: 36px;
+  background: rgba(77, 168, 255, 0.1);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.dash-guest-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-guest-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #e8e9ed);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-guest-time {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint, #5a5d6a);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-guest-badge {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(77, 168, 255, 0.14);
+  color: var(--info, #4da8ff);
+  flex-shrink: 0;
+}
+
+.dash-guest-badge.trial {
+  background: rgba(88, 204, 124, 0.12);
+  color: var(--accent, #58cc7c);
+}
+
+/* Guest check-out actions (Guests Today modal) */
+.dash-guest-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dash-guest-checkedout {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--accent, #58cc7c);
+  white-space: nowrap;
+}
+
+.dash-guest-checkout-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  border-radius: 6px;
+  background: rgba(77, 168, 255, 0.12);
+  color: var(--info, #4da8ff);
+  border: 1px solid rgba(77, 168, 255, 0.35);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.dash-guest-checkout-btn:hover:not(:disabled) {
+  background: rgba(77, 168, 255, 0.22);
+  border-color: var(--info, #4da8ff);
+  color: var(--info, #4da8ff);
+}
+
+.dash-guest-checkout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* At-Risk Members list */

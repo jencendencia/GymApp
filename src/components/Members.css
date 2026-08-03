@@ -469,11 +469,54 @@
 .fingerprint-hint {
   font-size: 11px;
   color: var(--text-faint);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.fingerprint-error {
+  font-size: 11px;
+  color: var(--danger);
+  line-height: 1.5;
+  text-align: center;
 }
 
 .fingerprint-progress {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* WebAuthn / Windows Hello enrollment guidance (idle state) */
+.fingerprint-steps {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.fingerprint-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fingerprint-steps strong {
+  color: var(--text);
+}
+
+.fingerprint-warn {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--warn);
+  line-height: 1.5;
 }
 
 /* Waiver badge in table */
@@ -909,6 +952,39 @@
   color: var(--text-faint);
   font-style: italic;
   padding: 6px 0;
+}
+
+/* Coach professional fee display in the new-member form */
+.member-coach-fee-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.member-coach-fee-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.member-coach-fee-amount {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.member-coach-fee-none {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 /* New Plan Payment */

@@ -59,6 +59,10 @@
   background: var(--warn);
 }
 
+.stat-dot.guest {
+  background: var(--info);
+}
+
 .checkins-list-container {
   flex: 1;
   overflow-y: auto;
@@ -166,6 +170,30 @@
 .checkin-status-badge.override {
   background: rgba(255, 176, 32, 0.15);
   color: var(--warn);
+}
+
+.checkin-status-badge.guest {
+  background: rgba(77, 168, 255, 0.15);
+  color: var(--info);
+}
+
+.checkin-status-badge.guest.done {
+  background: rgba(88, 204, 124, 0.12);
+  color: var(--accent);
+}
+
+/* Guest check-out actions on guest rows */
+.checkin-guest-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.checkin-guest-checkout {
+  padding: 4px 10px;
+  font-size: 11px;
 }
 
 .empty-state {

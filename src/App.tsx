@@ -19,7 +19,7 @@ import GlobalSearch from './components/GlobalSearch'
 import { setLogUser } from './lib/logger'
 import { todayLocal } from './lib/dates'
 import { setCurrencySymbol } from './lib/format'
-import { useDataVersion } from './lib/data'
+import { useDataVersion, notifyDataChanged } from './lib/data'
 
 type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings' | 'users'
 
@@ -53,6 +53,15 @@ function App() {
   // P2 6.5: data-layer change events — bump so the dashboard stats auto-refresh
   const dataVersion = useDataVersion()
 
+  // P2 6.5: cross-window refresh — when ANY window mutates data (e.g. a kiosk
+  // check-in), the main process broadcasts 'data-changed'; bump the local bus
+  // so the dashboard (and any data-version subscribers) re-fetch in real time.
+  // The kiosk window renders no dashboard, so it doesn't need to subscribe.
+  useEffect(() => {
+    if (isKioskMode()) return
+    return window.electronAPI?.onDataChanged?.(() => notifyDataChanged())
+  }, [])
+
   // P2 5.7: apply the persisted theme (dark/light) to the document root
   useEffect(() => {
     (async () => {
@@ -82,6 +91,9 @@ function App() {
     checkActivation()
     loadAppName()
     loadAppLogo()
+    // The kiosk window renders no clock, so a 1s ticker would just re-render the
+    // whole Kiosk every second for nothing (extra churn on a 24/7 display).
+    if (isKioskMode()) return
     const interval = setInterval(() => {
       setCurrentTime(new Date())
     }, 1000)

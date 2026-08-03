@@ -1,6 +1,7 @@
 import React, { RefObject } from 'react'
 import { Member, Plan, Coach, Payment } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
+import { todayLocal, planEndDate } from '../../lib/dates'
 import WaiverModal from './WaiverModal'
 
 // Payment methods that require a transaction reference number
@@ -37,7 +38,9 @@ export interface PaymentFormData {
 export interface FingerprintState {
   scanning: boolean
   captured: boolean
-  credentialId: string | null
+  /** Base64 ANSI-378 FMD template captured from the U.are.U reader */
+  fmdBase64: string | null
+  quality: number
   error: string | null
 }
 
@@ -99,6 +102,14 @@ function MemberFormModal(props: MemberFormModalProps) {
   const [showWaiverModal, setShowWaiverModal] = React.useState(false)
 
   const setFormData = (d: Partial<MemberFormData>) => onFormDataChange({ ...formData, ...d })
+
+  // Create-mode only: multi-session packs (sessions > 1) intentionally have no
+  // end date — the Plan End field is disabled so no one types a date that the
+  // submit path would silently discard.
+  const isCreateMultiSessionPack = !selectedMember && (() => {
+    const plan = plans.find(p => p.id === formData.plan_id)
+    return !!plan && plan.type === 'session_pack' && (plan.sessions || 0) > 1
+  })()
 
   return (
     <div className="modal-overlay">
@@ -167,7 +178,7 @@ function MemberFormModal(props: MemberFormModalProps) {
                 </div>
               </div>
 
-              {/* Fingerprint Registration - Real WebAuthn */}
+              {/* Fingerprint Registration - native U.are.U 4500 */}
               <div className="enrollment-card">
                 <label className="section-label">Fingerprint Registration</label>
                 <div className="fingerprint-container">
@@ -175,7 +186,9 @@ function MemberFormModal(props: MemberFormModalProps) {
                     <div className="fingerprint-captured">
                       <div className="fingerprint-success-icon">✓</div>
                       <span className="fingerprint-status success">Fingerprint Registered</span>
-                      <span className="fingerprint-hint">Using Windows Hello biometric authentication</span>
+                      <span className="fingerprint-hint">
+                        The member can now check in at the kiosk by placing this finger on the U.R.U. 4500 reader.
+                      </span>
                       <button type="button" className="btn btn-secondary btn-sm" onClick={onRetakeFingerprint}>Retake</button>
                     </div>
                   ) : fingerprint.scanning ? (
@@ -186,14 +199,23 @@ function MemberFormModal(props: MemberFormModalProps) {
                         <div className="scan-ring ring-3" />
                         <div className="fingerprint-icon-pulse">👆</div>
                       </div>
-                      <span className="fingerprint-status">Place your finger on the scanner...</span>
-                      <span className="fingerprint-hint">Windows Hello will prompt you to verify</span>
+                      <span className="fingerprint-status">Waiting for fingerprint...</span>
+                      <span className="fingerprint-hint">
+                        Ask the member to hold their finger flat on the U.R.U. 4500 reader and lift after the beep.
+                      </span>
                     </div>
                   ) : (
                     <div className="fingerprint-idle">
                       <div className="fingerprint-icon-large">👆</div>
                       <span className="fingerprint-status">Register member's fingerprint</span>
-                      <span className="fingerprint-hint">Uses Windows Hello for secure biometric verification</span>
+                      <span className="fingerprint-hint">Scans directly from the DigitalPersona U.R.U. 4500 reader</span>
+                      <div className="fingerprint-steps">
+                        <ol>
+                          <li>Make sure the <strong>U.R.U. 4500</strong> is plugged in (see Settings → Fingerprint Scanner).</li>
+                          <li>Click <strong>Start Registration</strong> below.</li>
+                          <li>Ask the member to <strong>place their finger</strong> on the reader and lift after the beep.</li>
+                        </ol>
+                      </div>
                       {fingerprint.error && <span className="fingerprint-error">{fingerprint.error}</span>}
                       <button type="button" className="btn btn-primary btn-sm" onClick={onFingerprintScan}>🔍 Start Registration</button>
                     </div>
@@ -364,18 +386,26 @@ function MemberFormModal(props: MemberFormModalProps) {
                           const planId = Number(e.target.value)
                           const plan = plans.find(p => p.id === planId)
                           const prevPlan = plans.find(p => p.id === formData.plan_id)
+                          // Keep the selected coach's professional fee in the auto-filled total
+                          const coachFee = formData.coach_id > 0 ? (coaches.find(c => c.id === formData.coach_id)?.professional_fee || 0) : 0
+                          // Plan dates follow the plan: end = start + duration_days
+                          // (per-session passes = +1 day; multi-session packs = no end
+                          // date). Start defaults to today when not yet set.
+                          const start = formData.plan_start || todayLocal()
                           onFormDataChange({
                             ...formData,
                             plan_id: planId,
+                            plan_start: start,
+                            plan_end: plan ? planEndDate(plan, start) : '',
                             balance: plan ? plan.price : 0,
                           })
                           onPaymentFormChange((prev) => {
+                            const wasAutoFilled = prev.amount <= 0 || prev.amount === (prevPlan?.price || 0) + coachFee
                             if (planId === 0) {
-                              if (prevPlan && prev.amount === prevPlan.price) return { ...prev, amount: 0 }
+                              if (prevPlan && wasAutoFilled) return { ...prev, amount: coachFee }
                               return prev
                             }
-                            const wasAutoFilled = prevPlan ? prev.amount === prevPlan.price : false
-                            if (prev.amount <= 0 || wasAutoFilled) return { ...prev, amount: plan ? plan.price : 0 }
+                            if (wasAutoFilled) return { ...prev, amount: (plan ? plan.price : 0) + coachFee }
                             return prev
                           })
                         }}
@@ -393,11 +423,48 @@ function MemberFormModal(props: MemberFormModalProps) {
                     </div>
                     <div className="form-group">
                       <label>Plan Start</label>
-                      <input type="date" className="input" value={formData.plan_start} onChange={(e) => setFormData({ plan_start: e.target.value })} />
+                      <input
+                        type="date"
+                        className="input"
+                        value={formData.plan_start}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setFormData({
+                            ...formData,
+                            plan_start: val,
+                            // Keep coaching start in sync with the plan when it wasn't customized
+                            coaching_start: formData.coach_id > 0 && (!formData.coaching_start.trim() || formData.coaching_start === formData.plan_start)
+                              ? val
+                              : formData.coaching_start,
+                          })
+                        }}
+                      />
                     </div>
                     <div className="form-group">
                       <label>Plan End</label>
-                      <input type="date" className="input" value={formData.plan_end} onChange={(e) => setFormData({ plan_end: e.target.value })} />
+                      <input
+                        type="date"
+                        className="input"
+                        value={formData.plan_end}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setFormData({
+                            ...formData,
+                            plan_end: val,
+                            // Keep coaching end in sync with the plan when it wasn't customized
+                            coaching_end: formData.coach_id > 0 && (!formData.coaching_end.trim() || formData.coaching_end === formData.plan_end)
+                              ? val
+                              : formData.coaching_end,
+                          })
+                        }}
+                        disabled={isCreateMultiSessionPack}
+                        title={isCreateMultiSessionPack ? 'Multi-session packs have no time-based end' : ''}
+                      />
+                      {isCreateMultiSessionPack ? (
+                        <span className="field-hint">Multi-session packs don't expire by time — no end date.</span>
+                      ) : (
+                        formData.plan_end && <span className="field-hint">Auto-filled from the plan — adjust if needed</span>
+                      )}
                     </div>
                   </div>
                   {/* P2 5.2: auto-renew toggle for new members */}
@@ -426,10 +493,25 @@ function MemberFormModal(props: MemberFormModalProps) {
                         value={formData.coach_id}
                         onChange={(e) => {
                           const cid = Number(e.target.value)
+                          const newCoach = cid > 0 ? coaches.find(c => c.id === cid) : undefined
+                          const oldCoach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
+                          const newFee = newCoach?.professional_fee || 0
+                          const oldFee = oldCoach?.professional_fee || 0
                           setFormData({
                             coach_id: cid,
-                            coaching_start: cid > 0 ? formData.coaching_start : '',
-                            coaching_end: cid > 0 ? formData.coaching_end : '',
+                            // Auto-fill coaching dates from the plan dates when a coach is picked
+                            coaching_start: cid > 0 ? (formData.coaching_start || formData.plan_start) : '',
+                            coaching_end: cid > 0 ? (formData.coaching_end || formData.plan_end) : '',
+                          })
+                          // Add the coach's professional fee to the amount to be paid
+                          onPaymentFormChange((prev) => {
+                            const plan = plans.find(p => p.id === formData.plan_id)
+                            const planPrice = plan?.price || 0
+                            const wasAutoFilled = prev.amount === planPrice + oldFee
+                            if (prev.amount <= 0 || wasAutoFilled) {
+                              return { ...prev, amount: Math.max(0, planPrice + newFee) }
+                            }
+                            return prev
                           })
                         }}
                       >
@@ -438,6 +520,20 @@ function MemberFormModal(props: MemberFormModalProps) {
                           <option key={coach.id} value={coach.id}>{coach.name}</option>
                         ))}
                       </select>
+                      {formData.coach_id > 0 && (() => {
+                        const selectedCoach = coaches.find(c => c.id === formData.coach_id)
+                        if (!selectedCoach) return null
+                        return (
+                          <div className="member-coach-fee-display">
+                            <span className="member-coach-fee-label">Professional Fee</span>
+                            {selectedCoach.professional_fee ? (
+                              <span className="member-coach-fee-amount">{formatMoney(selectedCoach.professional_fee)}</span>
+                            ) : (
+                              <span className="member-coach-fee-none">No fee set</span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
                     {formData.coach_id > 0 && (
                       <div className="form-group">
@@ -466,6 +562,33 @@ function MemberFormModal(props: MemberFormModalProps) {
                   <span className="payment-hint">A payment is required to create this member</span>
                 </div>
               </div>
+              {/* Amount breakdown: plan + coach fee = total to be paid */}
+              {(formData.plan_id > 0 || formData.coach_id > 0) && (() => {
+                const selectedPlan = plans.find(p => p.id === formData.plan_id)
+                const selectedCoach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
+                const coachFee = selectedCoach?.professional_fee || 0
+                const total = (selectedPlan?.price || 0) + coachFee
+                return (
+                  <div className="newplan-payment-summary" style={{ marginBottom: 12 }}>
+                    {selectedPlan && (
+                      <div className="summary-row">
+                        <span>Plan — {selectedPlan.name}</span>
+                        <span className="mono-text">{formatMoney(selectedPlan.price)}</span>
+                      </div>
+                    )}
+                    {selectedCoach && (
+                      <div className="summary-row">
+                        <span>Coach fee — {selectedCoach.name}</span>
+                        <span className="mono-text">{coachFee ? formatMoney(coachFee) : '—'}</span>
+                      </div>
+                    )}
+                    <div className="summary-row summary-total">
+                      <span>Total to be paid</span>
+                      <span className="mono-text">{formatMoney(total)}</span>
+                    </div>
+                  </div>
+                )
+              })()}
               <div className="payment-form">
                 <div className="payment-form-grid">
                   <div className="form-group">

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Member, Plan } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
+import { todayLocalOf, planEndDate } from '../../lib/dates'
 import WaiverModal from './WaiverModal'
 
 // Payment methods that require a transaction reference number
@@ -66,6 +67,8 @@ function NewPlanModal(props: NewPlanModalProps) {
   const planPrice = selectedPlan?.price || 0
   const payingNow = payment.amount > 0 ? payment.amount : 0
   const remainingAfter = Math.max(0, (member.balance || 0) + planPrice - payingNow)
+  // Multi-session packs (sessions > 1) have no time-based end — lock the field.
+  const isMultiSessionPack = selectedPlan?.type === 'session_pack' && (selectedPlan.sessions || 0) > 1
 
   return (
     <div className="modal-overlay">
@@ -82,7 +85,25 @@ function NewPlanModal(props: NewPlanModalProps) {
                 ref={planRef}
                 className={`input ${validationAttempted && data.plan_id === 0 ? 'input-required-missing' : ''}`}
                 value={data.plan_id}
-                onChange={(e) => props.onDataChange({ ...data, plan_id: Number(e.target.value) })}
+                onChange={(e) => {
+                  const id = Number(e.target.value)
+                  const plan = plans.find(p => p.id === id)
+                  const isPack = plan?.type === 'session_pack'
+                  let nextEnd = data.plan_end
+                  if (isPack) {
+                    // Single-session (per-session) passes end a day after they start;
+                    // multi-session packs have no time-based end (same rule as the
+                    // new-member form).
+                    nextEnd = planEndDate(plan, data.plan_start)
+                  } else if (!nextEnd && plan?.duration_days && plan.duration_days > 0) {
+                    // Switching back to a duration-based plan after a session pack —
+                    // restore a sensible default end so the member still expires on time.
+                    const d = new Date()
+                    d.setDate(d.getDate() + plan.duration_days)
+                    nextEnd = todayLocalOf(d)
+                  }
+                  props.onDataChange({ ...data, plan_id: id, plan_end: nextEnd })
+                }}
               >
                 <option value={0}>— Select a plan —</option>
                 {plans.map((plan) => (
@@ -111,7 +132,15 @@ function NewPlanModal(props: NewPlanModalProps) {
                 className="input"
                 value={data.plan_end}
                 onChange={(e) => props.onDataChange({ ...data, plan_end: e.target.value })}
+                disabled={isMultiSessionPack}
+                title={isMultiSessionPack ? 'Session packs are valid until all sessions are used' : ''}
               />
+              {selectedPlan?.type === 'session_pack' && (selectedPlan.sessions || 0) === 1 && (
+                <span className="field-hint">Valid for one day — ends the day after it starts.</span>
+              )}
+              {isMultiSessionPack && (
+                <span className="field-hint">Session packs don't expire by time — valid until all sessions are used.</span>
+              )}
             </div>            </div>
 
             {/* P2 5.2: auto-renew toggle */}

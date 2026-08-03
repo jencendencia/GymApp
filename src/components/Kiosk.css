@@ -3,64 +3,126 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding: 20px 40px 24px;
+  /* One non-scrollable screen: the kiosk layout scales with vh so everything
+     fits on any monitor, and any accidental overflow is hidden, never scrolled. */
+  overflow: hidden;
+}
+
+/* Cross-fade state screens (flicker fix): all main screens stay mounted and
+   fade into each other, so the kiosk never unmounts/remounts a full screen and
+   never flashes through a blank frame during state changes. */
+.kiosk-screens {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  /* Centered via auto margins: perfectly centered when the content fits, and
+     scrolls cleanly from the top when it overflows — no center/scroll jiggle. */
+  margin: auto;
+}
+
+.kiosk-screen {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 24px 40px 40px;
-  overflow-y: auto;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.22s ease, visibility 0s linear 0.22s;
+}
+
+.kiosk-screen.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.22s ease, visibility 0s linear 0s;
 }
 
 /* Idle State */
 .kiosk-idle {
+  position: relative; /* containing block for the hero area + floating cards */
+  height: 100%;
+  width: 100%;
+  cursor: pointer;
+}
+
+/* Hero logo area — fills the idle screen; the controls dock over its lower
+   half in a floating card, so the logo can be 2.5x bigger and still fit on
+   the one non-scrollable screen. */
+.kiosk-idle-hero {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  /* Logo anchored at the very top so it sits clear of the docked control card
+     instead of overlapping it (centered vertically put them on top of each
+     other on short kiosk screens). */
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: min(16px, 2vh);
+}
+
+/* In the frameless kiosk window the logo starts flush at the top of the
+   screen — the .kiosk container has no top padding, so remove the hero's too. */
+.app-kiosk-mode .kiosk-idle-hero {
+  padding-top: 0;
+}
+
+/* 'Waiting for fingerprint' title — sits directly below the radar, inside the
+   floating control card. */
+.kiosk-idle-title {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  max-width: 500px;
-  width: 100%;
-  cursor: pointer;
+  justify-content: center;
 }
 
 .kiosk-idle:active {
   opacity: 0.98;
 }
 
-/* Big Kiosk Logo */
+/* Big Kiosk Logo — transparent with no border, sits directly on the kiosk
+   background. The container matches the logo's 3:2 landscape aspect ratio so
+   every pixel of screen height goes to the image (a square box wasted space). */
 .kiosk-big-logo {
-  width: 360px;
-  height: 360px;
-  border-radius: 48px;
-  overflow: hidden;
-  background: var(--surface, #1a1d23);
-  border: 1px solid var(--border, #2a2d35);
+  width: 460px;
+  aspect-ratio: 3 / 2;
+  max-width: 100%; /* safety: shrink if the screen is narrow */
+  background: transparent;
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-bottom: 16px;
 }
 
 .kiosk-big-logo img {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  padding: 32px;
 }
 
-/* Larger kiosk logo in kiosk window mode */
+/* Kiosk window mode — 2.5x bigger: the logo is 864px wide on a 720p kiosk
+   (120vh) and tops out at 880px on larger monitors, always capped by the
+   screen width so it still fits on one non-scrollable screen. */
 .app-kiosk-mode .kiosk-big-logo {
-  width: 480px;
-  height: 480px;
-  border-radius: 64px;
-  margin-bottom: 32px;
-}
-
-.app-kiosk-mode .kiosk-big-logo img {
-  padding: 48px;
+  width: auto;
+  /* Height-driven so the logo ALWAYS clears the docked control card: the card
+     zone takes ~250px, so on a 720p kiosk the logo is 470px tall (705px wide,
+     ~2x the old 345px) and on taller monitors it tops out at 520px (780px). */
+  height: min(520px, calc(100vh - 250px));
+  aspect-ratio: 3 / 2;
+  max-width: 92vw;
 }
 
 .radar-container {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 100px;
+  height: 100px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -72,19 +134,32 @@
   height: 100%;
   border: 2px solid var(--accent-dim);
   border-radius: 50%;
+  opacity: 0.28;
+  /* Pulse restored (flicker test): staggered expanding rings on the idle
+     screen, same as the original pre-flicker-fix behavior. */
   animation: radar-pulse 2.4s ease-out infinite;
 }
 
-.ring-1 {
-  animation-delay: 0s;
+.radar-ring:nth-child(1) { animation-delay: 0s; }
+.radar-ring:nth-child(2) { animation-delay: 0.8s; }
+.radar-ring:nth-child(3) { animation-delay: 1.6s; }
+
+/* The original radar-pulse scales to 2.5x, which inside the compact docked
+   card would spill past the card edges — use a contained pulse there so the
+   idle screen still looks clean while the animation runs. */
+.kiosk-control-card .radar-ring {
+  animation-name: radar-pulse-card;
 }
 
-.ring-2 {
-  animation-delay: 0.8s;
-}
-
-.ring-3 {
-  animation-delay: 1.6s;
+@keyframes radar-pulse-card {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
 }
 
 .fingerprint-icon {
@@ -98,22 +173,129 @@
   height: 32px;
 }
 
+/* Floating control card — docks at the bottom of the idle screen, over the
+   logo, holding the radar, title, subtitle, promo and actions. This is what
+   lets the logo take 2.5x the screen while staying on one screen. */
+.kiosk-control-card {
+  position: absolute;
+  left: 50%;
+  bottom: min(18px, 2.4vh);
+  transform: translateX(-50%);
+  z-index: 4;
+  width: min(680px, 94vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: min(4px, 0.55vh);
+  padding: min(10px, 1.3vh) min(24px, 3vh);
+  background: var(--surface, #1a1d22);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: min(18px, 2.4vh);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+/* Compact radar + fingerprint icon inside the docked card — two rules so it
+   applies in both the in-app kiosk view and the kiosk window (the second
+   outranks the larger index.css .app-kiosk-mode sizing). */
+.kiosk-control-card .radar-container {
+  width: min(96px, 12vh);
+  height: min(96px, 12vh);
+}
+
+.app-kiosk-mode .kiosk-control-card .radar-container {
+  width: min(96px, 12vh);
+  height: min(96px, 12vh);
+}
+
+.kiosk-control-card .fingerprint-icon svg {
+  width: min(48px, 6.2vh);
+  height: min(48px, 6.2vh);
+}
+
+.app-kiosk-mode .kiosk-control-card .fingerprint-icon svg {
+  width: min(48px, 6.2vh);
+  height: min(48px, 6.2vh);
+}
+
+/* Smaller 'Waiting for fingerprint' title inside the card (overrides the
+   bigger .app-kiosk-mode .kiosk-title in index.css). */
+.kiosk-control-card .kiosk-title,
+.app-kiosk-mode .kiosk-control-card .kiosk-title {
+  font-size: min(26px, 3vh);
+}
+
+/* Manual search floats above the card as an overlay (like the Member ID card),
+   so opening it never grows the card or pushes it over the logo. */
+.kiosk-control-card .manual-search-box,
+.app-kiosk-mode .kiosk-control-card .manual-search-box {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(480px, 94vw);
+  margin-top: 0;
+  padding: 10px;
+  background: var(--surface, #1a1d22);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  /* The generic animate-fade-in keyframes animate transform (translateY) which
+     would override the translateX(-50%) centering mid-animation and make the
+     box pop in off-center — disable it here. */
+  animation: none;
+}
+
+/* Keep the guest count from inflating the docked card */
+.kiosk-control-card .kiosk-guest-count {
+  margin-top: min(6px, 0.8vh);
+}
+
+.kiosk-control-card .kiosk-external-controls {
+  margin-top: min(8px, 1vh);
+  padding-top: min(8px, 1vh);
+}
+
 .kiosk-title {
-  font-size: 24px;
+  font-size: 14px;
   color: var(--text);
   margin: 0;
+  display: flex;
+  align-items: center;
 }
 
 .kiosk-subtitle {
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 12px;
   margin: 0;
 }
 
-.kiosk-scan-btn {
-  padding: 16px 40px;
-  font-size: 16px;
-  margin-top: 16px;
+/* Inline 'scanning' indicator — a small pulsing dot next to the idle title.
+   Replaces the old full-screen 'Scanning...' view so the kiosk never swaps
+   screens during a fingerprint scan (that swap caused the visible flicker). */
+.kiosk-scan-dot {
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  border-radius: 50%;
+  background: var(--accent-dim, #8fbe2a);
+  margin-right: 0.4em;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.kiosk-scan-dot.active {
+  background: var(--accent, #c6ff3d);
+  animation: kiosk-scan-pulse 1s ease-out infinite;
+}
+
+@keyframes kiosk-scan-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(198, 255, 61, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 0.55em rgba(198, 255, 61, 0);
+  }
 }
 
 .kiosk-manual-link {
@@ -122,25 +304,60 @@
   color: var(--text-muted);
   font-size: 14px;
   cursor: pointer;
-  margin-top: 16px;
   text-decoration: underline;
   text-underline-offset: 4px;
+}
+
+/* Kiosk action links — single row (P2 5.1) */
+.kiosk-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+}
+
+.kiosk-action-row .kiosk-manual-link {
+  white-space: nowrap;
 }
 
 .kiosk-manual-link:hover {
   color: var(--text);
 }
 
+/* Floating Member ID card — overlays the screen (centered) so it never adds
+   height to the non-scrollable idle layout, no matter the monitor size. */
 .kiosk-member-id-section {
-  width: 100%;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  width: min(400px, 88%);
   max-width: 400px;
-  margin-top: 8px;
+  padding: 14px 16px 16px;
+  background: var(--surface, #1a1d22);
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  animation: kiosk-card-in 0.25s ease-out;
+}
+
+@keyframes kiosk-card-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 10px));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
 }
 
 .kiosk-member-id-input {
   width: 100%;
-  padding: 14px 18px;
-  font-size: 20px;
+  padding: min(11px, 1.5vh) 16px;
+  font-size: min(17px, 2.2vh);
   font-family: var(--font-display);
   text-align: center;
   letter-spacing: 2px;
@@ -158,7 +375,7 @@
 
 .kiosk-member-id-input::placeholder {
   color: var(--text-faint);
-  font-size: 16px;
+  font-size: min(16px, 2.1vh);
   letter-spacing: 0;
 }
 
@@ -188,40 +405,6 @@
 
 .manual-search-box .input {
   flex: 1;
-}
-
-/* Scanning State */
-.kiosk-scanning {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-}
-
-.scanning-animation {
-  position: relative;
-  width: 120px;
-  height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.scanning-ring {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border: 3px solid var(--accent);
-  border-radius: 50%;
-  animation: radar-pulse 1.2s ease-out infinite;
-}
-
-.scanning-ring.ring-2 {
-  animation-delay: 0.4s;
-}
-
-.scanning-ring.ring-3 {
-  animation-delay: 0.8s;
 }
 
 /* Profile State */
@@ -383,6 +566,16 @@
   color: var(--danger);
 }
 
+/* Session-pack remaining count on the match-found profile */
+.metadata-value.sessions-left {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.metadata-value.sessions-left.low {
+  color: var(--warn);
+}
+
 .expiry-section {
   margin-bottom: 24px;
 }
@@ -478,8 +671,8 @@
 
 /* ── External Kiosk Window Controls ── */
 .kiosk-external-controls {
-  margin-top: 32px;
-  padding-top: 24px;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--border, #2a2d35);
   display: flex;
   gap: 12px;
@@ -492,15 +685,22 @@
   border-radius: 8px;
 }
 
-/* Scanner-disabled note on idle screen */
+/* Scanner-disabled note — floats at the top of the idle screen (the logo now
+   fills the screen, so the note can't be in flow). */
 .kiosk-scanner-disabled-note {
-  max-width: 420px;
-  padding: 10px 16px;
+  position: absolute;
+  top: min(12px, 1.6vh);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: 90vw;
+  padding: min(8px, 1.1vh) 16px;
   border-radius: 8px;
-  background: rgba(255, 176, 32, 0.12);
+  /* Solid surface so it reads as a floating banner over the flush logo */
+  background: var(--surface, #1a1d22);
   border: 1px solid rgba(255, 176, 32, 0.35);
   color: var(--warn);
-  font-size: 13px;
+  font-size: min(13px, 1.7vh);
   text-align: center;
 }
 
@@ -673,30 +873,34 @@
   font-size: 13px;
 }
 
-/* ── Idle promo carousel (P2 5.1) ── */
+/* ── Idle promo carousel (P2 5.1) — single compact row inside the control card
+   (a height change in the old stacked layout re-centered the screen and looked
+   like the kiosk moving, so the row is one fixed-height line). ── */
 .kiosk-promo-carousel {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 10px;
-  margin-top: 28px;
-  padding: 16px 28px;
-  max-width: 520px;
-  background: var(--surface, #1a1d22);
+  gap: min(10px, 1.3vh);
+  padding: min(4px, 0.6vh) min(14px, 1.8vh);
+  max-width: 100%;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
   border: 1px solid var(--border, #2a2d35);
-  border-radius: 16px;
-  animation: fade-in 0.4s ease-out;
+  border-radius: 999px;
 }
 
 .kiosk-promo-icon {
-  font-size: 26px;
+  font-size: min(18px, 2.3vh);
+  flex-shrink: 0;
 }
 
 .kiosk-promo-text {
-  font-size: 15px;
+  font-size: min(13px, 1.7vh);
   color: var(--text-muted, #9aa1ac);
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kiosk-promo-dots {

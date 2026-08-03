@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['better-sqlite3'],
+              external: ['better-sqlite3', 'koffi'],
             },
           },
         },
@@ -27,6 +27,20 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+          },
+        },
+      },
+      {
+        // Native fingerprint service worker thread — bundled separately so the
+        // main process can spawn it with new Worker() and keep the blocking
+        // dpfpdd_capture out of the main thread.
+        entry: 'electron/fingerprint.worker.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['koffi'],
+            },
           },
         },
       },

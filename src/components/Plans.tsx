@@ -13,12 +13,16 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
+  // Numeric fields are kept as raw strings while editing — a controlled
+  // number input that coerces with Number() snaps back on every keystroke
+  // (e.g. '1500.' → 1500), and Chromium can even refuse to type into a field
+  // prefilled with 0 until the spinner is used. Values are converted on submit.
   const [formData, setFormData] = useState({
     name: '',
     type: 'monthly' as 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family',
-    duration_days: 30,
-    sessions: 0,
-    price: 0,
+    duration_days: '30',
+    sessions: '0',
+    price: '',
   })
 
   useEffect(() => {
@@ -36,11 +40,16 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
 
   const handleCreate = async () => {
     try {
-      const result = await window.electronAPI.createPlan(formData)
+      const result = await window.electronAPI.createPlan({
+        ...formData,
+        duration_days: Number(formData.duration_days) || 0,
+        sessions: Number(formData.sessions) || 0,
+        price: Number(formData.price) || 0,
+      })
       setShowForm(false)
       resetForm()
       notifyDataChanged()
-      log.createPlan(result.lastInsertRowid as number, formData.name, formData.price)
+      log.createPlan(result.lastInsertRowid as number, formData.name, Number(formData.price))
     } catch (error) {
       console.error('Failed to create plan:', error)
     }
@@ -49,7 +58,12 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const handleUpdate = async () => {
     if (!selectedPlan) return
     try {
-      await window.electronAPI.updatePlan(selectedPlan.id, formData)
+      await window.electronAPI.updatePlan(selectedPlan.id, {
+        ...formData,
+        duration_days: Number(formData.duration_days) || 0,
+        sessions: Number(formData.sessions) || 0,
+        price: Number(formData.price) || 0,
+      })
       setShowForm(false)
       setSelectedPlan(null)
       resetForm()
@@ -58,7 +72,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       // Build changes object
       const changedFields: Record<string, any> = {}
       if (selectedPlan.name !== formData.name) changedFields.name = formData.name
-      if (selectedPlan.price !== formData.price) changedFields.price = formData.price
+      if (selectedPlan.price !== Number(formData.price)) changedFields.price = Number(formData.price)
       if (selectedPlan.type !== formData.type) changedFields.type = formData.type
       if (Object.keys(changedFields).length > 0) {
         log.updatePlan(selectedPlan.id, formData.name, changedFields)
@@ -86,9 +100,9 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
     setFormData({
       name: '',
       type: 'monthly',
-      duration_days: 30,
-      sessions: 0,
-      price: 0,
+      duration_days: '30',
+      sessions: '0',
+      price: '',
     })
   }
 
@@ -97,14 +111,15 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
     setFormData({
       name: plan.name,
       type: plan.type,
-      duration_days: plan.duration_days || 30,
-      sessions: plan.sessions || 0,
-      price: plan.price,
+      duration_days: String(plan.duration_days || 30),
+      sessions: String(plan.sessions || 0),
+      price: String(plan.price ?? 0),
     })
     setShowForm(true)
   }
 
   const formatType = (type: string) => {
+    if (type === 'session_pack') return 'Per Session'
     return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
   }
 
@@ -205,7 +220,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     <option value="monthly">Monthly</option>
                     <option value="quarterly">Quarterly</option>
                     <option value="annual">Annual</option>
-                    <option value="session_pack">Session Pack</option>
+                    <option value="session_pack">Per Session</option>
                     <option value="family">Family</option>
                   </select>
                 </div>
@@ -215,9 +230,10 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     type="number"
                     className="input"
                     value={formData.price}
-                    onChange={(e) => setFormData({ ...formData, price: Number(e.target.value) })}
+                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                     step="0.01"
                     min="0"
+                    placeholder="0.00"
                   />
                 </div>
                 <div className="form-group">
@@ -226,17 +242,17 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     type="number"
                     className="input"
                     value={formData.duration_days}
-                    onChange={(e) => setFormData({ ...formData, duration_days: Number(e.target.value) })}
+                    onChange={(e) => setFormData({ ...formData, duration_days: e.target.value })}
                     min="0"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Sessions (for session packs)</label>
+                  <label>Sessions (for per-session plans)</label>
                   <input
                     type="number"
                     className="input"
                     value={formData.sessions}
-                    onChange={(e) => setFormData({ ...formData, sessions: Number(e.target.value) })}
+                    onChange={(e) => setFormData({ ...formData, sessions: e.target.value })}
                     min="0"
                   />
                 </div>
@@ -249,7 +265,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
               <button
                 className="btn btn-primary"
                 onClick={selectedPlan ? handleUpdate : handleCreate}
-                disabled={!formData.name || formData.price <= 0}
+                disabled={!formData.name || !formData.price || Number(formData.price) <= 0}
               >
                 {selectedPlan ? 'Save Changes' : 'Create Plan'}
               </button>

@@ -14,6 +14,24 @@ export function addDaysLocal(d: Date, days: number): string {
   return todayLocalOf(next)
 }
 
+/** Compute a plan's end date from its type and a local YYYY-MM-DD start date.
+ * - Per-session (single-session) passes are valid for one day → start + 1.
+ * - Multi-session packs have no time-based end → '' (valid until sessions run out).
+ * - Duration plans (monthly/quarterly/annual/family) → start + duration_days.
+ * Returns '' when the plan or start is missing (callers treat '' as 'no end date').
+ */
+export function planEndDate(
+  plan: { type?: string; duration_days?: number | null; sessions?: number | null } | null | undefined,
+  start: string
+): string {
+  if (!plan || !start) return ''
+  if (plan.type === 'session_pack') {
+    return Number(plan.sessions) === 1 ? addDaysLocal(new Date(`${start}T00:00:00`), 1) : ''
+  }
+  const days = Number(plan.duration_days) || 0
+  return days > 0 ? addDaysLocal(new Date(`${start}T00:00:00`), days) : ''
+}
+
 /** Format any Date as a local YYYY-MM-DD string. */
 export function todayLocalOf(d: Date): string {
   const y = d.getFullYear()

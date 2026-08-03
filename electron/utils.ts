@@ -12,6 +12,13 @@ export function nowLocal(): string {
   return `${formatDateLocal(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
 }
 
+/** UTC YYYY-MM-DD HH:MM:SS — matches SQLite CURRENT_TIMESTAMP so renderers can
+ * parse stored timestamps as UTC (the app-wide convention; local-time values
+ * would display offset when parsed with the '+Z' trick). */
+export function nowUtc(): string {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ')
+}
+
 /** Format a Date as a local YYYY-MM-DD string. */
 export function formatDateLocal(d: Date): string {
   const y = d.getFullYear()

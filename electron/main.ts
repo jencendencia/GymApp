@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, screen, session, shell, safeStorage, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, screen, session, shell, safeStorage, protocol, net, WebContents } from 'electron'
 import crypto from 'crypto'
 import fs from 'fs'
+import http from 'http'
 import os from 'os'
 import path from 'path'
 import { pathToFileURL } from 'url'
@@ -8,11 +9,146 @@ import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
 import nodemailer from 'nodemailer'
 import { autoUpdater } from 'electron-updater'
-import { todayLocal, nowLocal, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays } from './utils'
+import { todayLocal, nowUtc, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays } from './utils'
+import { Worker } from 'worker_threads'
 
 let mainWindow: BrowserWindow | null = null
 let kioskWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
+
+// ── Native fingerprint worker bridge ──
+// The U.are.U fingerprint service runs inside a worker thread (fingerprint.worker.ts)
+// so the blocking dpfpdd_capture never freezes the main process. koffi's registered
+// callbacks (.register/.async) crash on some Windows machines, so the worker uses
+// plain synchronous FFI calls instead — the renderer talks to it through these
+// request/response IPC handlers.
+let fpWorker: Worker | null = null
+let fpReqSeq = 0
+const fpPending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>()
+
+function fpWorkerPath(): string {
+  const p = path.join(__dirname, 'fingerprint.worker.js')
+  // Packaged apps: prefer the asar-unpacked copy (Node worker_threads cannot
+  // load scripts from inside an asar archive).
+  const unpacked = p.replace('app.asar', 'app.asar.unpacked')
+  return fs.existsSync(unpacked) ? unpacked : p
+}
+
+function ensureFpWorker(): Worker {
+  if (fpWorker) return fpWorker
+  fpWorker = new Worker(fpWorkerPath(), {
+    workerData: { libDirs: [app.getPath('userData'), path.dirname(process.execPath)] },
+  })
+  fpWorker.on('message', (msg: any) => {
+    const p = fpPending.get(msg?.id)
+    if (!p) return
+    fpPending.delete(msg.id)
+    if (msg.ok) p.resolve(msg.data)
+    else p.reject(new Error(msg.error || 'Fingerprint worker error'))
+  })
+  fpWorker.on('error', (err: Error) => {
+    logMain('error', 'Fingerprint worker error', { error: err.message })
+    fpPending.forEach((p) => p.reject(err))
+    fpPending.clear()
+  })
+  fpWorker.on('exit', () => {
+    fpWorker = null
+    fpPending.forEach((p) => p.reject(new Error('Fingerprint worker exited')))
+    fpPending.clear()
+  })
+  return fpWorker
+}
+
+// Send a request to the fingerprint worker and resolve with its reply.
+function fpCall(type: string, payload?: Record<string, unknown>): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const id = ++fpReqSeq
+    fpPending.set(id, { resolve, reject })
+    try {
+      ensureFpWorker().postMessage({ id, type, ...(payload || {}) })
+    } catch (error) {
+      fpPending.delete(id)
+      reject(error)
+    }
+  })
+}
+
+async function shutdownFpWorker() {
+  if (!fpWorker) return
+  const worker = fpWorker
+  // Give the worker a moment to release the reader/libs (dpfpdd_close/exit)
+  // before terminating; if it's stuck in a capture slice, terminate anyway.
+  const done = new Promise<void>((resolve) => {
+    try {
+      worker.postMessage({ id: -1, type: 'shutdown' })
+    } catch {
+      // ignore
+    }
+    const timer = setTimeout(resolve, 1200)
+    worker.once('message', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+  await done
+  worker.terminate()
+  fpWorker = null
+  fpPending.forEach((p) => p.reject(new Error('Fingerprint worker shut down')))
+  fpPending.clear()
+}
+
+// ── Local renderer server (WebAuthn origin fix) ──
+// Chromium only exposes the WebAuthn fingerprint API (Windows Hello) to HTTPS,
+// localhost, or extension origins — a file:// renderer throws "only available to
+// HTTPS origins with valid certificates...". In production the built renderer is
+// served over http://localhost:<port> so fingerprint enrollment and kiosk
+// scanning work. Dev mode keeps using the Vite dev server (already localhost).
+let rendererServer: http.Server | null = null
+let rendererPort = 0
+const RENDERER_DIST = path.join(__dirname, '../dist')
+
+// ── Cross-window data refresh (P2 6.5) ──
+// The renderer data bus (useDataVersion) is per-window. When a mutation happens
+// in one window (e.g. a check-in on the kiosk), notify every OTHER window so
+// their dashboards/lists refresh in real time. The sender is excluded — it
+// already bumps its own bus via notifyDataChanged().
+function broadcastDataChanged(sender?: WebContents) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win && !win.isDestroyed() && win.webContents !== sender) {
+      win.webContents.send('data-changed')
+    }
+  }
+}
+
+// ── Kiosk window status ──
+// The dashboard shows whether the kiosk window is open/closed and disables the
+// 'Open Kiosk' button while it is. Whenever the kiosk window is created or
+// closed (from any window or the display auto-launch), broadcast the status so
+// every renderer's UI stays in sync in real time.
+function broadcastKioskStatus() {
+  const open = !!(kioskWindow && !kioskWindow.isDestroyed())
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('kiosk-status-changed', open)
+    }
+  }
+}
+
+// ── Fingerprint template validation ──
+// Valid enrollment templates are ANSI-378 FMDs: >= 26 bytes starting with the
+// "FMR\0" record-header magic (46 4D 52 00). Older builds stored Windows Hello
+// WebAuthn credential IDs (32-byte random blobs) as "templates" instead —
+// dpfj_identify rejects the WHOLE 1:N call when any entry is malformed, so such
+// rows must be filtered out everywhere templates are read, and purged once at
+// startup so they never poison kiosk matching again.
+function isValidFmd(template: any): boolean {
+  try {
+    const buf = Buffer.isBuffer(template) ? template : Buffer.from(String(template || ''), 'base64')
+    return buf.length >= 26 && buf.toString('latin1', 0, 4) === 'FMR\u0000'
+  } catch {
+    return false
+  }
+}
 
 // ── App icon ──
 // Resolve the icon path for the window/taskbar. Works in dev (project root) and
@@ -298,7 +434,8 @@ function initDatabase() {
       name TEXT NOT NULL,
       phone TEXT,
       type TEXT NOT NULL DEFAULT 'guest' CHECK(type IN ('guest', 'trial')),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      checked_out_at DATETIME DEFAULT NULL
     );
   `)
 
@@ -315,6 +452,7 @@ function initDatabase() {
     { table: 'payments', column: 'transaction_ref', def: 'TEXT DEFAULT NULL' },
     { table: 'payments', column: 'staff_id', def: 'INTEGER DEFAULT NULL' },
     { table: 'checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
+    { table: 'guest_checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
     { table: 'members', column: 'waiver_agreed_at', def: 'DATETIME DEFAULT NULL' },
     { table: 'staff', column: 'photo', def: 'TEXT DEFAULT NULL' },
     { table: 'staff', column: 'display_name', def: 'TEXT DEFAULT NULL' },
@@ -381,6 +519,35 @@ function initDatabase() {
     }
   }
   runMigrations()
+
+  // Day passes (1-session per-session plans) don't consume sessions — reset any
+  // stale sessions_used left by earlier builds so the members table reads cleanly.
+  // Idempotent: only touches counts > 0 for 1-session plans.
+  try {
+    db!.prepare(`
+      UPDATE members SET sessions_used = 0
+      WHERE sessions_used > 0 AND plan_id IN (SELECT id FROM plans WHERE type = 'session_pack' AND sessions = 1)
+    `).run()
+  } catch (error: any) {
+    logMain('warn', 'Day-pass sessions_used reset skipped', { error: error.message })
+  }
+
+  // One-time cleanup: purge legacy fingerprint templates that aren't valid
+  // ANSI-378 FMDs (old builds stored Windows Hello WebAuthn credential IDs as
+  // 32-byte blobs). One malformed entry makes dpfj_identify fail the entire 1:N
+  // call, so the kiosk could never match anyone. Idempotent: only removes rows
+  // that fail the format check.
+  try {
+    const allTpl = db!.prepare('SELECT id, template FROM fingerprint_templates').all() as any[]
+    const bad = allTpl.filter((r) => !isValidFmd(r.template))
+    if (bad.length > 0) {
+      const del = db!.prepare('DELETE FROM fingerprint_templates WHERE id = ?')
+      for (const r of bad) del.run(r.id)
+      logMain('warn', `Purged ${bad.length} legacy non-ANSI-378 fingerprint template(s)`, { ids: bad.map((r) => r.id) })
+    }
+  } catch (error: any) {
+    logMain('warn', 'Fingerprint template cleanup skipped', { error: error.message })
+  }
 
   // One-time hardening: encrypt any legacy plaintext secret settings at startup so
   // existing databases are protected immediately (not only after the next Save).
@@ -499,6 +666,115 @@ function getMachineId(): string {
   return `${Math.abs(hash).toString(16).padStart(8, '0')}-${os.hostname().slice(0, 8).padEnd(8, '_')}`
 }
 
+// ── Local renderer HTTP server (WebAuthn origin fix) ──
+// Windows Hello fingerprint (WebAuthn) is only available on HTTPS, localhost, or
+// extension origins. Production previously loaded the UI via file://, which
+// Chromium rejects — fingerprint enrollment threw "only available to HTTPS
+// origins with valid certificates...". Serving the same built files over
+// http://localhost:<port> gives the app an eligible origin. 'localhost' is also
+// the WebAuthn RP ID the renderer already uses, so no registration or
+// verification changes are needed.
+const RENDERER_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.txt': 'text/plain; charset=utf-8',
+}
+
+function rendererContentType(filePath: string): string {
+  return RENDERER_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+}
+
+// Serve the built renderer from disk over a loopback HTTP server. Binds to
+// 'localhost' on an ephemeral port so the origin host is exactly 'localhost'
+// (matching the app's WebAuthn RP ID).
+function startRendererServer(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        let pathname: string
+        try {
+          pathname = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname)
+        } catch {
+          pathname = '/'
+        }
+        if (pathname === '/' || pathname === '') pathname = '/index.html'
+
+        const root = path.join(RENDERER_DIST, '')
+        // Normalize and strip any leading ../ segments before joining
+        const clean = path.normalize(pathname).replace(/^(?:\.\.[/\\])+/, '')
+        const filePath = path.join(root, clean)
+        // Path-traversal guard: resolved path must stay inside the dist folder
+        if (!filePath.startsWith(root)) {
+          res.writeHead(403, { 'Content-Type': 'text/plain' })
+          res.end('Forbidden')
+          return
+        }
+
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          const data = fs.readFileSync(filePath)
+          res.writeHead(200, {
+            'Content-Type': rendererContentType(filePath),
+            'Content-Length': data.length,
+            'Cache-Control': 'no-store',
+          })
+          res.end(data)
+        } else {
+          // Unknown path → 404. The app has no client-side routing (all
+          // navigation is state-based), so only '/' and /assets/* are ever hit.
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end('Not found')
+        }
+      } catch (error: any) {
+        logMain('warn', 'Renderer server request failed', { url: req.url, error: error.message })
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'text/plain' })
+        res.end('Internal error')
+      }
+    })
+    server.on('error', reject)
+    server.listen(0, 'localhost', () => {
+      const addr = server.address()
+      const port = typeof addr === 'object' && addr ? addr.port : 0
+      if (!port) {
+        server.close()
+        reject(new Error('Renderer server bound without a port'))
+        return
+      }
+      rendererServer = server
+      resolve(port)
+    })
+  })
+}
+
+// Resolve the renderer URL for the given window. Dev uses the Vite dev server;
+// production uses the local renderer server so WebAuthn works. If the server
+// failed to start, fall back to file:// (the app still runs, fingerprint
+// features just stay unavailable).
+function getRendererUrl(query?: string): string {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return query ? `${process.env.VITE_DEV_SERVER_URL}?${query}` : process.env.VITE_DEV_SERVER_URL
+  }
+  if (rendererPort > 0) {
+    return `http://localhost:${rendererPort}${query ? `?${query}` : ''}`
+  }
+  const filePath = path.join(RENDERER_DIST, 'index.html').replace(/\\/g, '/')
+  return `file://${filePath}${query ? `?${query}` : ''}`
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -520,11 +796,7 @@ function createWindow() {
   // Auto-updater setup
   setupAutoUpdater()
 
-  if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
-  }
+  mainWindow.loadURL(getRendererUrl())
 
   // If the main window closes, also close the kiosk window
   mainWindow.on('closed', () => {
@@ -567,10 +839,7 @@ function createKioskWindow() {
   })
 
   // Load the app with kiosk mode query param
-  const kioskUrl = process.env.VITE_DEV_SERVER_URL
-    ? `${process.env.VITE_DEV_SERVER_URL}?mode=kiosk`
-    : `file://${path.join(__dirname, '../dist/index.html').replace(/\\/g, '/')}?mode=kiosk`
-  kioskWindow.loadURL(kioskUrl)
+  kioskWindow.loadURL(getRendererUrl('mode=kiosk'))
 
   // Once ready, position on the secondary display and show
   kioskWindow.once('ready-to-show', () => {
@@ -583,7 +852,11 @@ function createKioskWindow() {
 
   kioskWindow.on('closed', () => {
     kioskWindow = null
+    broadcastKioskStatus()
   })
+
+  // A new kiosk window was created — tell every window it's now open
+  broadcastKioskStatus()
 }
 
 // ── Kiosk Auto-Launch ──
@@ -1046,7 +1319,7 @@ function setupIPC() {
   ipcMain.handle('get-member', (_, id: number) => {
     autoExpireMembers()
     return db?.prepare(`
-      SELECT m.*, p.name as plan_name, c.name as coach_name
+      SELECT m.*, p.name as plan_name, c.name as coach_name, p.type as plan_type, p.sessions as plan_sessions
       FROM members m
       LEFT JOIN plans p ON m.plan_id = p.id
       LEFT JOIN coaches c ON m.coach_id = c.id
@@ -1074,7 +1347,7 @@ function setupIPC() {
     return { last, next: last + 1 }
   })
 
-  ipcMain.handle('create-member', (_, member) => {
+  ipcMain.handle('create-member', (event, member) => {
     const err = validateMember(member)
     if (err) throw new Error(err)
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
@@ -1107,15 +1380,16 @@ function setupIPC() {
     if (res?.lastInsertRowid) {
       sendWelcomeEmail(Number(res.lastInsertRowid)).catch(() => {})
     }
+    broadcastDataChanged(event.sender)
     return res
   })
 
-  ipcMain.handle('update-member', (_, id: number, member) => {
+  ipcMain.handle('update-member', (event, id: number, member) => {
     const err = validateMember(member)
     if (err) throw new Error(err)
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
-    return db?.prepare(`
+    const res = db?.prepare(`
       UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
       WHERE id = ?
     `).run(
@@ -1141,18 +1415,22 @@ function setupIPC() {
       member.auto_renew === undefined ? undefined : (member.auto_renew ? 1 : 0),
       id
     )
+    broadcastDataChanged(event.sender)
+    return res
   })
 
   // Soft delete: mark archived so check-ins / payments / templates are preserved (P1 3.4)
-  ipcMain.handle('delete-member', (_, id: number) => {
-    return db?.prepare('UPDATE members SET archived = 1 WHERE id = ?').run(id)
+  ipcMain.handle('delete-member', (event, id: number) => {
+    const res = db?.prepare('UPDATE members SET archived = 1 WHERE id = ?').run(id)
+    broadcastDataChanged(event.sender)
+    return res
   })
 
   ipcMain.handle('search-members', (_, query: string) => {
     autoExpireMembers()
     const like = `%${escapeLike(query)}%`
     return db?.prepare(`
-      SELECT m.*, p.name as plan_name, c.name as coach_name
+      SELECT m.*, p.name as plan_name, c.name as coach_name, p.type as plan_type, p.sessions as plan_sessions
       FROM members m
       LEFT JOIN plans p ON m.plan_id = p.id
       LEFT JOIN coaches c ON m.coach_id = c.id
@@ -1180,18 +1458,20 @@ function setupIPC() {
       LEFT JOIN plans p ON m.plan_id = p.id
       LEFT JOIN coaches c ON m.coach_id = c.id
       ${where}
-      ORDER BY m.name ASC
+      ORDER BY m.created_at DESC, m.id DESC
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset) || []
     return { rows, total: totalRow?.count || 0, offset, limit }
   })
 
   // ── Guest / trial check-ins (P2 5.1) ──
-  ipcMain.handle('create-guest-checkin', (_, guest: { name?: string; phone?: string; type?: string }) => {
+  ipcMain.handle('create-guest-checkin', (event, guest: { name?: string; phone?: string; type?: string }) => {
     if (!isNonEmptyString(guest?.name)) throw new Error('Guest name is required.')
     const type = guest.type === 'trial' ? 'trial' : 'guest'
-    return db?.prepare('INSERT INTO guest_checkins (name, phone, type) VALUES (?, ?, ?)')
+    const res = db?.prepare('INSERT INTO guest_checkins (name, phone, type) VALUES (?, ?, ?)')
       .run(guest.name.trim(), guest.phone?.trim() || null, type)
+    broadcastDataChanged(event.sender)
+    return res
   })
 
   ipcMain.handle('get-guest-checkins', (_, date?: string) => {
@@ -1199,6 +1479,17 @@ function setupIPC() {
     return db?.prepare(`
       SELECT * FROM guest_checkins WHERE DATE(created_at, 'localtime') = ? ORDER BY created_at DESC
     `).all(day) || []
+  })
+
+  // Check a guest out — marks when they left (only for still-checked-in guests).
+  // Stored in UTC (matching created_at) so the renderer's '+Z' parsing shows the
+  // correct local time.
+  ipcMain.handle('checkout-guest', (event, id: number) => {
+    const now = nowUtc()
+    const res = db?.prepare('UPDATE guest_checkins SET checked_out_at = ? WHERE id = ? AND checked_out_at IS NULL')
+      .run(now, id)
+    broadcastDataChanged(event.sender)
+    return { success: !!(res && res.changes > 0) }
   })
 
   ipcMain.handle('get-guest-checkins-count', (_, date?: string) => {
@@ -1277,17 +1568,20 @@ function setupIPC() {
       FROM checkins c
       JOIN members m ON c.member_id = m.id
       WHERE DATE(c.timestamp, 'localtime') = ? AND c.checked_out_at IS NULL
-      ORDER BY c.timestamp ASC
+      ORDER BY c.timestamp DESC, c.id DESC
     `).all(today) || []
   })
 
-  ipcMain.handle('checkout-member', (_, checkinId: number) => {
-    const now = nowLocal()
+  ipcMain.handle('checkout-member', (event, checkinId: number) => {
+    // UTC (matches the check-in timestamp convention) so the renderer's '+Z'
+    // parsing displays the correct local checkout time.
+    const now = nowUtc()
     db?.prepare('UPDATE checkins SET checked_out_at = ? WHERE id = ?').run(now, checkinId)
+    broadcastDataChanged(event.sender)
     return { success: true }
   })
 
-  ipcMain.handle('create-checkin', (_, checkin) => {
+  ipcMain.handle('create-checkin', (event, checkin) => {
     try {
       const err = validateCheckin(checkin)
       if (err) return { success: false, reason: 'invalid', message: err }
@@ -1300,6 +1594,11 @@ function setupIPC() {
       `).get(checkin.member_id) as any
 
       if (!member) return { success: false, reason: 'not_found', message: 'Member not found.' }
+
+      // A 1-session "per session" plan is a day pass — it's time-gated
+      // (plan_end/status) with unlimited same-day re-entry, so it never
+      // consumes or enforces the remaining-session count.
+      const isDayPass = member.plan_type === 'session_pack' && Number(member.plan_sessions) === 1
 
       // Manual override entries always go through (explicit staff override)
       if (checkin.status !== 'override') {
@@ -1316,14 +1615,15 @@ function setupIPC() {
           }
         }
 
-        // Session-pack enforcement: block when no sessions remain
-        if (member.plan_type === 'session_pack' && typeof member.plan_sessions === 'number') {
+        // Session-pack enforcement: block when no sessions remain (day passes
+        // are time-gated by plan_end/status, so only multi-session packs enforce)
+        if (!isDayPass && member.plan_type === 'session_pack' && typeof member.plan_sessions === 'number') {
           const remaining = member.plan_sessions - (member.sessions_used || 0)
           if (remaining <= 0) {
             return {
               success: false,
               reason: 'no_sessions',
-              message: `${member.name} has no remaining sessions in their session pack.`,
+              message: `${member.name} has no remaining sessions in their per-session plan.`,
             }
           }
         }
@@ -1356,12 +1656,14 @@ function setupIPC() {
         VALUES (?, ?, ?, ?)
       `).run(checkin.member_id, checkin.method, checkin.match_confidence, checkin.status)
 
-      // Consume a session for session-pack plans
-      if (member.plan_type === 'session_pack') {
+      // Consume a session for multi-session pack plans (day passes are
+      // unlimited while the pass is still valid — no session to consume)
+      if (member.plan_type === 'session_pack' && !isDayPass) {
         db?.prepare('UPDATE members SET sessions_used = sessions_used + 1 WHERE id = ?')
           .run(checkin.member_id)
       }
 
+      broadcastDataChanged(event.sender)
       return { success: true, id: res?.lastInsertRowid }
     } catch (error: any) {
       console.error('create-checkin error:', error)
@@ -1412,28 +1714,14 @@ function setupIPC() {
     `).all(today, today)
   })
 
-  // Fingerprint templates
-  ipcMain.handle('save-fingerprint', (_, memberId: number, template: Buffer, quality: number) => {
+  // Fingerprint templates. template is the base64 ANSI-378 FMD produced by the
+  // native U.are.U SDK path (legacy WebAuthn hex credential IDs are also valid
+  // base64 of the raw bytes, so this stays compatible).
+  ipcMain.handle('save-fingerprint', (_, memberId: number, templateBase64: string, quality: number) => {
     return db?.prepare(`
       INSERT INTO fingerprint_templates (member_id, template, quality)
       VALUES (?, ?, ?)
-    `).run(memberId, template, quality)
-  })
-
-  ipcMain.handle('save-fingerprint-credential', async (_, memberCode: string, credentialId: string) => {
-    // Look up the member's integer id from the text member_id field
-    const member = db?.prepare('SELECT id FROM members WHERE member_id = ?').get(memberCode) as any
-    if (!member) throw new Error('Member not found')
-    return db?.prepare(`
-      INSERT INTO fingerprint_templates (member_id, template, quality)
-      VALUES (?, ?, ?)
-    `).run(member.id, Buffer.from(credentialId, 'hex'), 100)
-  })
-
-  ipcMain.handle('get-fingerprint', (_, memberId: number) => {
-    return db?.prepare(`
-      SELECT * FROM fingerprint_templates WHERE member_id = ?
-    `).all(memberId)
+    `).run(memberId, Buffer.from(String(templateBase64 || ''), 'base64'), quality || 0)
   })
 
   // Payments
@@ -1469,7 +1757,7 @@ function setupIPC() {
     return row?.count || 0
   })
 
-  ipcMain.handle('create-payment', (_, payment) => {
+  ipcMain.handle('create-payment', (event, payment) => {
     const err = validatePayment(payment)
     if (err) throw new Error(err)
     const res = db?.prepare(`
@@ -1488,6 +1776,7 @@ function setupIPC() {
     if (res?.lastInsertRowid) {
       sendReceiptEmail(Number(res.lastInsertRowid)).catch(() => {})
     }
+    broadcastDataChanged(event.sender)
     return res
   })
 
@@ -2018,7 +2307,84 @@ function setupIPC() {
     return db?.prepare(sql).all(...params) || []
   })
 
+  // Native fingerprint (U.R.U. 4500 / DigitalPersona U.are.U SDK) — replaces the
+  // Windows Hello WebAuthn flow so unlimited members can be enrolled and matched.
+  // All heavy lifting happens in the fingerprint worker thread.
+  ipcMain.handle('fingerprint-status', async () => {
+    try {
+      return await fpCall('status')
+    } catch (error: any) {
+      return { available: false, readerName: '', steps: [{ name: 'Worker', ok: false, message: error?.message || String(error) }] }
+    }
+  })
+
+  // Blocking capture with an optional timeout (ms). Returns a single good sample
+  // or a failure reason (unavailable/device/timeout/cancelled).
+  ipcMain.handle('fingerprint-capture', async (_event, timeoutMs?: number) => {
+    try {
+      return await fpCall('capture', { timeoutMs: timeoutMs || 30000 })
+    } catch (error: any) {
+      // The worker replies with the bare reason string for non-device failures and
+      // a human message for device errors — normalize to the typed reason union so
+      // renderers can branch on capture.reason reliably.
+      const raw = error?.message || 'device'
+      const reason = (['timeout', 'cancelled', 'unavailable', 'device'] as const).includes(raw)
+        ? raw
+        : 'device'
+      return { ok: false, reason, message: raw }
+    }
+  })
+
+  ipcMain.handle('fingerprint-stop-capture', async () => {
+    try {
+      await fpCall('cancel')
+    } catch {
+      // worker may be gone — nothing to cancel
+    }
+  })
+
+  ipcMain.handle('fingerprint-create-fmd', async (_event, imageBase64: string) => {
+    try {
+      return await fpCall('create-fmd', { imageBase64 })
+    } catch (error: any) {
+      return { error: error?.message || String(error) }
+    }
+  })
+
+  ipcMain.handle('fingerprint-identify', async (_event, fmdBase64: string, templates: { fmdBase64: string }[]) => {
+    try {
+      return await fpCall('identify', { fmdBase64, templates })
+    } catch (error: any) {
+      return { error: error?.message || String(error) }
+    }
+  })
+
+  // All enrolled fingerprint templates (for 1:N kiosk matching).
+  ipcMain.handle('get-all-fingerprint-templates', () => {
+    const rows = (db?.prepare(`
+      SELECT ft.member_id, ft.template, m.name as member_name, m.status, m.archived
+      FROM fingerprint_templates ft
+      JOIN members m ON m.id = ft.member_id
+      WHERE m.archived = 0
+      ORDER BY m.name ASC
+    `).all() as any[]) || []
+    // Only ANSI-378 FMDs are matchable — skip any legacy WebAuthn credential
+    // blobs still in the DB so dpfj_identify never fails on malformed data.
+    return rows
+      .filter((r) => isValidFmd(r.template))
+      .map((r) => ({
+        member_id: r.member_id,
+        member_name: r.member_name,
+        status: r.status,
+        fmdBase64: Buffer.isBuffer(r.template) ? r.template.toString('base64') : String(r.template || ''),
+      }))
+  })
+
   // Kiosk window
+  ipcMain.handle('get-kiosk-status', () => ({
+    open: !!(kioskWindow && !kioskWindow.isDestroyed()),
+  }))
+
   ipcMain.handle('open-kiosk-window', () => {
     createKioskWindow()
   })
@@ -2509,7 +2875,7 @@ function setupAutoBackup() {
   setInterval(runScheduledBackup, 60 * 1000)
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
     console.log('Starting REPCHECK...')
     initDatabase()
@@ -2519,6 +2885,20 @@ app.whenReady().then(() => {
     autoExpireMembers()
     setupIPC()
     console.log('IPC handlers set up')
+
+    // WebAuthn origin fix: in production the built renderer is served over
+    // http://localhost so the Windows Hello fingerprint API is available
+    // (file:// origins are rejected by Chromium). If the server fails to start,
+    // fall back to file:// so the app still runs.
+    if (!process.env.VITE_DEV_SERVER_URL) {
+      try {
+        rendererPort = await startRendererServer()
+        console.log(`Renderer server started on http://localhost:${rendererPort}`)
+      } catch (error: any) {
+        logMain('error', 'Renderer server failed to start — falling back to file:// (fingerprint unavailable)', { error: error.message })
+        console.error('Renderer server failed to start:', error)
+      }
+    }
 
     // Allow camera (QR check-in scanning) and desktop notifications in the renderer
     session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -2552,4 +2932,9 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   db?.close()
+  shutdownFpWorker()
+  if (rendererServer) {
+    rendererServer.close()
+    rendererServer = null
+  }
 })

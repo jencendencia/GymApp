@@ -33,15 +33,20 @@ export interface ElectronAPI {
   createGuestCheckin: (guest: { name: string; phone?: string; type?: string }) => Promise<any>
   getGuestCheckins: (date?: string) => Promise<GuestCheckin[]>
   getGuestCheckinsCount: (date?: string) => Promise<number>
+  checkoutGuest: (id: number) => Promise<{ success: boolean }>
 
   // Stats
   getTodayStats: () => Promise<TodayStats>
   getExpiringSoon: () => Promise<Member[]>
 
-  // Fingerprint
-  saveFingerprint: (memberId: number, template: Buffer, quality: number) => Promise<any>
-  saveFingerprintCredential: (memberId: string, credentialId: string) => Promise<any>
-  getFingerprint: (memberId: number) => Promise<any>
+  // Fingerprint (native U.are.U SDK — worker thread)
+  getFingerprintStatus: () => Promise<FingerprintStatus>
+  captureFingerprint: (timeoutMs?: number) => Promise<FingerprintCaptureResult>
+  stopFingerprintCapture: () => Promise<void>
+  createFingerprintFmd: (imageBase64: string) => Promise<{ fmdBase64: string } | { error: string }>
+  identifyFingerprint: (fmdBase64: string, templates: { fmdBase64: string }[]) => Promise<{ index: number } | { error: string }>
+  getAllFingerprintTemplates: () => Promise<FingerprintTemplateInfo[]>
+  saveFingerprint: (memberId: number, templateBase64: string, quality: number) => Promise<any>
 
   // Payments
   getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => Promise<Payment[]>
@@ -92,8 +97,10 @@ export interface ElectronAPI {
   restoreBackup: (password?: string) => Promise<{ success: boolean; reason?: string; message?: string }>
 
   // Kiosk window
+  getKioskStatus: () => Promise<{ open: boolean }>
   openKioskWindow: () => Promise<void>
   closeKioskWindow: () => Promise<void>
+  onKioskStatusChanged: (callback: (open: boolean) => void) => () => void
 
   // Auth / Staff
   login: (username: string, password: string) => Promise<{ success: boolean; user?: StaffUser; message?: string }>
@@ -121,6 +128,10 @@ export interface ElectronAPI {
   restartApp: () => Promise<void>
   restartAppWithBackup: () => Promise<{ success: boolean; path?: string; message?: string }>
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
+
+  // Cross-window data refresh (P2 6.5): fires when any window mutates data
+  // (e.g. a kiosk check-in), so this window can re-fetch its dashboard/lists.
+  onDataChanged: (callback: () => void) => () => void
 }
 
 export interface Coach {
@@ -354,6 +365,7 @@ export interface GuestCheckin {
   phone?: string
   type: 'guest' | 'trial'
   created_at: string
+  checked_out_at?: string | null
 }
 
 export interface ActivityLog {
@@ -416,6 +428,41 @@ export interface TodayStats {
   activeMembers: number
   expiredMembers: number
   expiringThisWeek: number
+}
+
+export interface FingerprintSample {
+  success: boolean
+  qualityCode: number
+  error: number
+  width: number
+  height: number
+  resolution: number
+  imageSize: number
+  /** ANSI-381 FID bytes (base64) — input for createFingerprintFmd */
+  imageBase64: string
+}
+
+export interface FingerprintStatusStep {
+  name: string
+  ok: boolean
+  message: string
+}
+
+export interface FingerprintStatus {
+  available: boolean
+  readerName: string
+  steps: FingerprintStatusStep[]
+}
+
+export type FingerprintCaptureResult =
+  | { ok: true; sample: FingerprintSample }
+  | { ok: false; reason: 'unavailable' | 'device' | 'timeout' | 'cancelled'; message?: string }
+
+export interface FingerprintTemplateInfo {
+  member_id: number
+  member_name: string
+  status: string
+  fmdBase64: string
 }
 
 export interface AtRiskMember {

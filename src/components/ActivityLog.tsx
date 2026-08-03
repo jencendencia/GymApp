@@ -20,6 +20,8 @@ const ACTION_META: Record<string, { label: string; icon: string; category: Actio
   checkin_fingerprint: { label: 'Fingerprint Check-in', icon: '🖐️', category: 'checkin', verb: 'checked in via fingerprint' },
   checkin_manual: { label: 'Manual Check-in', icon: '✍️', category: 'checkin', verb: 'checked in manually' },
   checkin_override: { label: 'Override Entry', icon: '🔓', category: 'checkin', verb: 'overrode check-in' },
+  guest_checkin: { label: 'Guest / Trial Check-in', icon: '🪪', category: 'checkin', verb: 'checked in guest' },
+  guest_checkout: { label: 'Guest Check-out', icon: '🚪', category: 'checkin', verb: 'checked out guest' },
   create_member: { label: 'Member Created', icon: '➕', category: 'member', verb: 'created member' },
   update_member: { label: 'Member Updated', icon: '✏️', category: 'member', verb: 'updated member' },
   delete_member: { label: 'Member Deleted', icon: '🗑️', category: 'member', verb: 'deleted member' },
@@ -169,6 +171,9 @@ function ActivityLog() {
       case 'checkin_manual':
       case 'checkin_override':
         return details.member_name || ''
+      case 'guest_checkin':
+      case 'guest_checkout':
+        return `${details.name || ''} · ${details.type === 'trial' ? 'Trial' : 'Day Pass'}`
       case 'create_member':
       case 'update_member':
       case 'delete_member':

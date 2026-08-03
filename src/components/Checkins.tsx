@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react'
 import './Checkins.css'
-import { Checkin } from '../types/electron'
+import { Checkin, GuestCheckin } from '../types/electron'
 import { todayLocal } from '../lib/dates'
 import { useDataVersion } from '../lib/data'
+import { log } from '../lib/logger'
 
 function Checkins() {
   const dataVersion = useDataVersion()
   const [checkins, setCheckins] = useState<Checkin[]>([])
   const [exporting, setExporting] = useState(false)
   const [selectedDate, setSelectedDate] = useState(todayLocal())
-  const [filterMethod, setFilterMethod] = useState<'all' | 'fingerprint' | 'manual'>('all')
+  const [filterMethod, setFilterMethod] = useState<'all' | 'fingerprint' | 'manual' | 'guest'>('all')
+  // P2 5.1: guest / trial check-ins for the selected date (shown alongside members)
+  const [guests, setGuests] = useState<GuestCheckin[]>([])
   // P1 4.2: pagination state
   const [page, setPage] = useState(0)
   const [totalCount, setTotalCount] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [checkingOutId, setCheckingOutId] = useState<number | null>(null)
   const PAGE_SIZE = 100
 
   useEffect(() => {
@@ -23,14 +27,35 @@ function Checkins() {
   const loadCheckins = async () => {
     try {
       setPage(0)
-      const [data, count] = await Promise.all([
+      const [data, count, guestData] = await Promise.all([
         window.electronAPI.getCheckins(selectedDate, { offset: 0, limit: PAGE_SIZE }),
         window.electronAPI.getCheckinsCount(selectedDate),
+        window.electronAPI.getGuestCheckins(selectedDate),
       ])
       setCheckins(data)
+      setGuests(guestData)
       setTotalCount(count)
     } catch (error) {
       console.error('Failed to load checkins:', error)
+    }
+  }
+
+  // Check a guest/trial out — marks when they left (only relevant for today)
+  const handleGuestCheckout = async (guest: GuestCheckin) => {
+    setCheckingOutId(guest.id)
+    try {
+      await window.electronAPI.checkoutGuest(guest.id)
+      log.action({
+        action: 'guest_checkout',
+        entity_type: 'guest_checkin',
+        entity_id: guest.id,
+        details: JSON.stringify({ name: guest.name, type: guest.type }),
+      })
+      loadCheckins()
+    } catch (error) {
+      console.error('Failed to check out guest:', error)
+    } finally {
+      setCheckingOutId(null)
     }
   }
 
@@ -52,6 +77,8 @@ function Checkins() {
   const filteredCheckins = checkins.filter(
     (c) => filterMethod === 'all' || c.method === filterMethod
   )
+
+  const filteredGuests = filterMethod === 'all' || filterMethod === 'guest' ? guests : []
 
   const formatTime = (timestamp: string) => {
     // SQLite timestamps are UTC; ensure correct parsing
@@ -118,6 +145,15 @@ function Checkins() {
       <td class="mono">${c.timestamp ? esc(fmtTs(c.timestamp)) : ''}</td>
       <td class="mono">${c.checked_out_at ? esc(fmtTs(c.checked_out_at)) : ''}</td>
     </tr>`).join('')}
+    ${filteredGuests.map(g => `<tr>
+      <td class="mono">🪪</td>
+      <td>${esc(g.name)}</td>
+      <td><span class="tag tag-manual">${esc(g.type)}</span></td>
+      <td><span class="tag ${g.checked_out_at ? 'tag-success' : 'tag-manual'}">${g.checked_out_at ? 'checked out' : 'checked in'}</span></td>
+      <td class="mono"></td>
+      <td class="mono">${esc(fmtTs(g.created_at))}</td>
+      <td class="mono">${g.checked_out_at ? esc(fmtTs(g.checked_out_at)) : ''}</td>
+    </tr>`).join('')}
   </tbody>
 </table>
 <div class="footer">Generated ${new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
@@ -160,12 +196,13 @@ function Checkins() {
             <option value="all">All Methods</option>
             <option value="fingerprint">Fingerprint</option>
             <option value="manual">Manual</option>
+            <option value="guest">Guests</option>
           </select>
           <button
             className="btn btn-secondary"
             onClick={handleExportExcel}
-            disabled={exporting || filteredCheckins.length === 0}
-            title={filteredCheckins.length === 0 ? 'No check-ins to export for this date' : 'Export check-ins as a styled Excel file'}
+            disabled={exporting || (filteredCheckins.length === 0 && filteredGuests.length === 0)}
+            title={filteredCheckins.length === 0 && filteredGuests.length === 0 ? 'No check-ins to export for this date' : 'Export check-ins as a styled Excel file'}
           >
             {exporting ? '⏳ Exporting...' : '⬇ Export Excel'}
           </button>
@@ -185,14 +222,18 @@ function Checkins() {
           <span className="stat-dot override" />
           <span>{getOverrideCount()} Override</span>
         </div>
+        <div className="stat-pill">
+          <span className="stat-dot guest" />
+          <span>{guests.length} Guest{guests.length !== 1 ? 's' : ''}</span>
+        </div>
       </div>
 
       <div className="checkins-list-container">
-        {filteredCheckins.length === 0 ? (
+        {filteredCheckins.length === 0 && filteredGuests.length === 0 ? (
           <div className="empty-state checkins-empty-state">
             <span className="empty-state-icon">📋</span>
             <p className="empty-state-title">No check-in history</p>
-            <p className="empty-state-hint">There are no check-ins recorded for {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. Pick another date or check in a member to see their entry here.</p>
+            <p className="empty-state-hint">There are no check-ins recorded for {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. Pick another date or check in a member or guest to see their entry here.</p>
           </div>
         ) : (
           <div className="checkins-list">
@@ -224,6 +265,37 @@ function Checkins() {
                 </div>
                 <div className={`checkin-status-badge ${checkin.status}`}>
                   {checkin.status}
+                </div>
+              </div>
+            ))}
+            {/* P2 5.1: guest / trial check-ins for the selected date */}
+            {filteredGuests.map((guest) => (
+              <div key={`guest-${guest.id}`} className="checkin-entry">
+                <div className="checkin-avatar">🪪</div>
+                <div className="checkin-details">
+                  <div className="checkin-main">
+                    <span className="checkin-member-name">{guest.name}</span>
+                    <span className="checkin-member-id">{guest.type === 'trial' ? 'Trial' : 'Day Pass'}</span>
+                  </div>
+                  <div className="checkin-meta">
+                    <span className="checkin-method">{guest.type === 'trial' ? 'Trial' : 'Guest'}</span>
+                    {guest.phone && <span className="mono-text">{guest.phone}</span>}
+                    <span className="checkin-timestamp mono-text">{formatTimestamp(guest.created_at)}</span>
+                  </div>
+                </div>
+                <div className="checkin-guest-status">
+                  <div className={`checkin-status-badge guest${guest.checked_out_at ? ' done' : ''}`}>
+                    {guest.checked_out_at ? 'Checked out' : guest.type === 'trial' ? 'Trial' : 'Guest'}
+                  </div>
+                  {!guest.checked_out_at && selectedDate === todayLocal() && (
+                    <button
+                      className="btn btn-sm btn-secondary checkin-guest-checkout"
+                      onClick={() => handleGuestCheckout(guest)}
+                      disabled={checkingOutId === guest.id}
+                    >
+                      {checkingOutId === guest.id ? '…' : 'Check Out'}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

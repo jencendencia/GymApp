@@ -40,7 +40,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [fingerprint, setFingerprint] = useState<FingerprintState>({
     scanning: false,
     captured: false,
-    credentialId: null,
+    fmdBase64: null,
+    quality: 0,
     error: null,
   })
   const [waiverAgreed, setWaiverAgreed] = useState(false)
@@ -174,8 +175,15 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       } else {
         // Expiring tab already needs the full list — reuse it for the badge too
         const data = await window.electronAPI.getMembers()
-        setMembers(data)
-        setAllMembers(data)
+        // Sort by registration date, newest first (matches the All tab ordering)
+        const sorted = [...data].sort((a, b) => {
+          const ta = a.created_at ? new Date(a.created_at).getTime() : 0
+          const tb = b.created_at ? new Date(b.created_at).getTime() : 0
+          // Same-second registrations fall back to newest id first (matches the All tab)
+          return tb - ta || b.id - a.id
+        })
+        setMembers(sorted)
+        setAllMembers(sorted)
         setTotalMembers(data.length)
       }
     } catch (error) {
@@ -292,77 +300,72 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     }, 500)
   }
 
-  // Real WebAuthn fingerprint registration using Windows Hello
+  // Native fingerprint enrollment via the U.are.U 4500 (DigitalPersona SDK).
+  // Captures a finger directly from the reader, converts the image to an
+  // ANSI-378 template, and stores it in the app DB — unlimited members, no
+  // Windows Hello, no passkey dialogs.
   const handleFingerprintScan = async () => {
     if (fingerprint.captured) return
 
-    setFingerprint({ scanning: true, captured: false, credentialId: null, error: null })
+    // Set the scanning state first so the button unmounts and a fast double-click
+    // can't fire two concurrent captures.
+    setFingerprint({ scanning: true, captured: false, fmdBase64: null, quality: 0, error: null })
 
     try {
-      const challenge = new Uint8Array(32)
-      crypto.getRandomValues(challenge)
-
-      const userId = new TextEncoder().encode(formData.member_id || generateMemberId())
-
-      const credential = await navigator.credentials.create({
-        publicKey: {
-          challenge,
-          rp: {
-            name: 'REPCHECK Gym Check-In',
-            id: window.location.hostname || 'localhost',
-          },
-          user: {
-            id: userId,
-            name: formData.email || formData.member_id || 'member',
-            displayName: formData.name || 'Member',
-          },
-          pubKeyCredParams: [
-            { alg: -7, type: 'public-key' },   // ES256
-            { alg: -257, type: 'public-key' }, // RS256
-          ],
-          authenticatorSelection: {
-            authenticatorAttachment: 'platform',
-            userVerification: 'required',
-            residentKey: 'required',
-          },
-          timeout: 60000,
-          attestation: 'none',
-        },
-      }) as PublicKeyCredential | null
-
-      if (credential) {
-        const credentialIdArray = new Uint8Array(credential.rawId)
-        const credentialIdHex = Array.from(credentialIdArray)
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('')
-
-        setFingerprint({
-          scanning: false,
-          captured: true,
-          credentialId: credentialIdHex,
-          error: null,
-        })
-      } else {
+      // Pre-flight: confirm the reader is connected before opening the capture.
+      const status = await window.electronAPI.getFingerprintStatus()
+      if (!status.available) {
+        const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
         setFingerprint({
           scanning: false,
           captured: false,
-          credentialId: null,
-          error: 'Registration cancelled',
+          fmdBase64: null,
+          quality: 0,
+          error: detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).',
         })
+        return
       }
+
+      // Wait (up to 30s) for a finger on the reader.
+      const capture = await window.electronAPI.captureFingerprint(30000)
+      if (!capture.ok) {
+        const msg = capture.reason === 'timeout'
+          ? 'No finger detected. Ask the member to place their finger on the U.R.U. 4500 and try again.'
+          : capture.reason === 'cancelled'
+            ? 'Registration cancelled.'
+            : capture.message || 'Fingerprint capture failed.'
+        setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: msg })
+        return
+      }
+
+      // Convert the captured image to an ANSI-378 template for storage.
+      const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
+      if ('error' in fmdRes) {
+        setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: fmdRes.error })
+        return
+      }
+
+      setFingerprint({
+        scanning: false,
+        captured: true,
+        fmdBase64: fmdRes.fmdBase64,
+        quality: capture.sample.qualityCode || 0,
+        error: null,
+      })
     } catch (error: any) {
       console.error('Fingerprint registration error:', error)
       setFingerprint({
         scanning: false,
         captured: false,
-        credentialId: null,
+        fmdBase64: null,
+        quality: 0,
         error: error.message || 'Registration failed',
       })
     }
   }
 
   const handleRetakeFingerprint = () => {
-    setFingerprint({ scanning: false, captured: false, credentialId: null, error: null })
+    setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: null })
   }
 
   // Required-field validation for the member form
@@ -410,6 +413,13 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const handleCreate = async () => {
     try {
       const memberId = formData.member_id || generateMemberId()
+      // A single-session (per-session) pass keeps its computed +1-day end date;
+      // multi-session packs have no time-based end (NULL) so auto-expire never
+      // flags the member as expired.
+      const memberPlan = plans.find(p => p.id === formData.plan_id)
+      const memberPlanEnd = memberPlan?.type === 'session_pack'
+        ? (Number(memberPlan.sessions) === 1 ? (formData.plan_end || undefined) : undefined)
+        : formData.plan_end || undefined
       const result = await window.electronAPI.createMember({
         member_id: memberId,
         name: formData.name,
@@ -420,7 +430,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         emergency_phone: formData.emergency_phone || undefined,
         plan_id: formData.plan_id || undefined,
         plan_start: formData.plan_start || undefined,
-        plan_end: formData.plan_end || undefined,
+        plan_end: memberPlanEnd,
         height: formData.height ? Number(formData.height) : undefined,
         weight: formData.weight ? Number(formData.weight) : undefined,
         birthday: formData.birthday || undefined,
@@ -435,9 +445,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       // Get the numeric ID of the newly created member
       const newNumericId = result?.lastInsertRowid ? Number(result.lastInsertRowid) : 0
 
-      // Save the fingerprint credential if captured
-      if (fingerprint.captured && fingerprint.credentialId) {
-        await window.electronAPI.saveFingerprintCredential(memberId, fingerprint.credentialId)
+      // Save the fingerprint template if captured
+      if (fingerprint.captured && fingerprint.fmdBase64) {
+        await window.electronAPI.saveFingerprint(newNumericId, fingerprint.fmdBase64, fingerprint.quality || 0)
         if (newNumericId) log.registerFingerprint(newNumericId, formData.name)
       }
 
@@ -484,6 +494,24 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
             method: paymentForm.payment_method,
           }),
         })
+
+        // Record the coach professional fee as a coach fee payment so it shows up
+        // in the Coaches page collected totals (only the portion this payment covers)
+        if (formData.coach_id > 0) {
+          const coach = coaches.find(c => c.id === formData.coach_id)
+          const coachFee = coach?.professional_fee || 0
+          const planPrice = plans.find(p => p.id === formData.plan_id)?.price || 0
+          const feeCollected = Math.max(0, Math.min(coachFee, payAmount - planPrice))
+          if (coach && feeCollected > 0) {
+            await window.electronAPI.createCoachFeePayment({
+              coach_id: coach.id,
+              member_id: newNumericId,
+              amount: feeCollected,
+              notes: 'Coach fee from new member enrollment',
+            })
+            log.recordFeePayment(coach.id, coach.name, formData.name, feeCollected)
+          }
+        }
       }
 
       setShowForm(false)
@@ -522,9 +550,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         waiver_agreed_at: waiverAgreedAt || undefined,
       })
 
-      // Update fingerprint credential if newly captured
-      if (fingerprint.captured && fingerprint.credentialId) {
-        await window.electronAPI.saveFingerprintCredential(selectedMember.member_id, fingerprint.credentialId)
+      // Update fingerprint template if newly captured
+      if (fingerprint.captured && fingerprint.fmdBase64) {
+        await window.electronAPI.saveFingerprint(selectedMember.id, fingerprint.fmdBase64, fingerprint.quality || 0)
         log.registerFingerprint(selectedMember.id, formData.name)
       }
 
@@ -606,7 +634,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       photo: '',
     })
     setPhotoPreview(null)
-    setFingerprint({ scanning: false, captured: false, credentialId: null, error: null })
+    setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: null })
     setWaiverAgreed(false)
     setWaiverAgreedAt(null)
     setValidationAttempted(false)
@@ -676,6 +704,11 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       // Get the plan price for auto-updating balance
       const selectedPlan = plans.find(p => p.id === newPlanData.plan_id)
       const planPrice = selectedPlan?.price || 0
+      // A single-session (per-session) pass keeps its end date; multi-session packs
+      // have no time-based end (NULL) so auto-expire never flags the member.
+      const planEnd = selectedPlan?.type === 'session_pack'
+        ? (Number(selectedPlan.sessions) === 1 ? (newPlanData.plan_end || undefined) : undefined)
+        : newPlanData.plan_end
       // New balance: outstanding balance + plan price - payment made now
       const paymentAmount = newPlanPayment.amount > 0 ? newPlanPayment.amount : 0
       const newBalance = Math.max(0, (newPlanMember.balance || 0) + planPrice - paymentAmount)
@@ -689,7 +722,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         emergency_phone: newPlanMember.emergency_phone || undefined,
         plan_id: newPlanData.plan_id,
         plan_start: newPlanData.plan_start,
-        plan_end: newPlanData.plan_end,
+        plan_end: planEnd,
         height: newPlanMember.height,
         weight: newPlanMember.weight,
         birthday: newPlanMember.birthday || undefined,
@@ -697,7 +730,11 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coaching_start: newPlanMember.coaching_start || undefined,
         coaching_end: newPlanMember.coaching_end || undefined,
         balance: newBalance,
-        status: newPlanMember.status,
+        status: 'active',
+        // A new plan (especially a fresh session pack) starts with a clean slate —
+        // otherwise sessions_used carries over and a returning pack member would
+        // silently lose sessions (mirrors the kiosk renewal flow).
+        sessions_used: 0,
         auto_renew: newPlanAutoRenew ? 1 : 0,
         waiver_agreed_at: (!newPlanMember.waiver_agreed_at && renewWaiverAgreed && renewWaiverAgreedAt)
           ? renewWaiverAgreedAt

@@ -35,17 +35,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createGuestCheckin: (guest: { name: string; phone?: string; type?: string }) => ipcRenderer.invoke('create-guest-checkin', guest),
   getGuestCheckins: (date?: string) => ipcRenderer.invoke('get-guest-checkins', date),
   getGuestCheckinsCount: (date?: string) => ipcRenderer.invoke('get-guest-checkins-count', date),
+  checkoutGuest: (id: number) => ipcRenderer.invoke('checkout-guest', id),
 
   // Stats
   getTodayStats: () => ipcRenderer.invoke('get-today-stats'),
   getExpiringSoon: () => ipcRenderer.invoke('get-expiring-soon'),
 
-  // Fingerprint
-  saveFingerprint: (memberId: number, template: Buffer, quality: number) =>
-    ipcRenderer.invoke('save-fingerprint', memberId, template, quality),
-  saveFingerprintCredential: (memberId: string, credentialId: string) =>
-    ipcRenderer.invoke('save-fingerprint-credential', memberId, credentialId),
-  getFingerprint: (memberId: number) => ipcRenderer.invoke('get-fingerprint', memberId),
+  // Fingerprint (native U.are.U SDK — worker thread)
+  getFingerprintStatus: () => ipcRenderer.invoke('fingerprint-status'),
+  captureFingerprint: (timeoutMs?: number) => ipcRenderer.invoke('fingerprint-capture', timeoutMs),
+  stopFingerprintCapture: () => ipcRenderer.invoke('fingerprint-stop-capture'),
+  createFingerprintFmd: (imageBase64: string) => ipcRenderer.invoke('fingerprint-create-fmd', imageBase64),
+  identifyFingerprint: (fmdBase64: string, templates: { fmdBase64: string }[]) =>
+    ipcRenderer.invoke('fingerprint-identify', fmdBase64, templates),
+  getAllFingerprintTemplates: () => ipcRenderer.invoke('get-all-fingerprint-templates'),
+  saveFingerprint: (memberId: number, templateBase64: string, quality: number) =>
+    ipcRenderer.invoke('save-fingerprint', memberId, templateBase64, quality),
 
   // Payments
   getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => ipcRenderer.invoke('get-payments', memberId, opts),
@@ -94,8 +99,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-coach-monthly-payments', coachId, date),
 
   // Kiosk window
+  getKioskStatus: () => ipcRenderer.invoke('get-kiosk-status'),
   openKioskWindow: () => ipcRenderer.invoke('open-kiosk-window'),
   closeKioskWindow: () => ipcRenderer.invoke('close-kiosk-window'),
+  onKioskStatusChanged: (callback: (open: boolean) => void) => {
+    const handler = (_: any, open: boolean) => callback(open)
+    ipcRenderer.on('kiosk-status-changed', handler)
+    return () => ipcRenderer.removeListener('kiosk-status-changed', handler)
+  },
 
   // Auth / Staff
   login: (username: string, password: string) => ipcRenderer.invoke('login', username, password),
@@ -126,5 +137,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: any, status: any) => callback(status)
     ipcRenderer.on('update-status', handler)
     return () => ipcRenderer.removeListener('update-status', handler)
+  },
+  // Cross-window data refresh (P2 6.5): the main process broadcasts this after
+  // any window mutates data (e.g. a kiosk check-in), so every window can re-fetch.
+  onDataChanged: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on('data-changed', handler)
+    return () => ipcRenderer.removeListener('data-changed', handler)
   },
 })
