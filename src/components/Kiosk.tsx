@@ -13,7 +13,7 @@ interface KioskProps {
 type KioskState = 'idle' | 'match-found' | 'no-match' | 'expired' | 'blocked'
 
 const AUTO_SCAN_DELAY = 600 // ms delay before auto-scanning
-const AUTO_CLOSE_SECONDS = 10
+const AUTO_CLOSE_SECONDS = 6
 // Backoff before re-arming the fingerprint scanner after a cancelled/failed scan.
 // Slower than the initial delay so a fast-failing prompt can't cause the kiosk to
 // rapidly flicker between screens trying to re-scan.
@@ -103,7 +103,26 @@ function Kiosk({ onRefresh }: KioskProps) {
   // Mirrors showManualSearch || showMemberIdInput with the LATEST value so the
   // async scan loop can consult it — a useCallback closure would be stale.
   const inputOpenRef = useRef(false)
+  // Latest scanner-enabled setting, so the self-scheduling scan loop can stop
+  // immediately if staff disable the scanner mid-session.
+  const scannerEnabledRef = useRef(true)
   const stateRef = useRef(state)
+  // False once the kiosk window unmounts (e.g. the window is closed mid-capture).
+  // Guards scheduleNext + handleRealScan so a pending capture can never re-arm
+  // the scanner on an unmounted component (that would loop IPC calls forever).
+  const mountedRef = useRef(true)
+
+  // Mark unmounted + clear any pending scan timer when the kiosk closes
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (autoScanTimer.current) {
+        clearTimeout(autoScanTimer.current)
+        autoScanTimer.current = null
+      }
+    }
+  }, [])
 
   // Load kiosk logo + settings from the Settings page
   useEffect(() => {
@@ -114,8 +133,10 @@ function Kiosk({ onRefresh }: KioskProps) {
       } catch {}
       try {
         const data = await window.electronAPI.getSettings()
+        const scannerEnabled = data.scannerEnabled !== 'false'
+        scannerEnabledRef.current = scannerEnabled
         setKioskSettings({
-          scannerEnabled: data.scannerEnabled !== 'false',
+          scannerEnabled,
           showMemberPhotos: data.showMemberPhotos !== 'false',
           enableNotifications: data.enableNotifications === 'true',
           autoLockTimeout: Number(data.autoLockTimeout) || 0,
@@ -283,13 +304,28 @@ function Kiosk({ onRefresh }: KioskProps) {
   // Real fingerprint check-in via the native U.are.U 4500 SDK — capture a finger
   // directly from the reader, build a probe template, and 1:N match it against
   // every enrolled member template. Unlimited members, no Windows Hello prompts.
+  //
+  // The scanner is SELF-SCHEDULING: every outcome re-arms the next capture, so
+  // the kiosk scans continuously in EVERY state — idle, the match-found modal,
+  // no-match, expired. That means the next member can place a finger while the
+  // previous member's confirmation is still on screen (no 10s wait), and a
+  // failed match re-scans automatically (no 'Try Again' click needed).
   const handleRealScan = useCallback(async () => {
+    if (!mountedRef.current) return
     if (isScanning.current) return
     // Don't start a capture if an input was opened while we were waiting
     if (inputOpenRef.current) return
     isScanning.current = true
 
     const currentState = stateRef.current
+
+    // Re-arm the scanner after this attempt. Always re-arms (continuous scan)
+    // unless an input is open or the scanner was disabled; back-off delays
+    // prevent flicker on fast failures.
+    const scheduleNext = (delay: number) => {
+      if (!mountedRef.current || inputOpenRef.current || !scannerEnabledRef.current) return
+      autoScanTimer.current = setTimeout(() => handleRealScan(), delay)
+    }
 
     try {
       // Load every enrolled member template for 1:N matching. Stay on the
@@ -299,41 +335,39 @@ function Kiosk({ onRefresh }: KioskProps) {
       if (templates.length === 0) {
         // No registered fingerprints yet — retry occasionally instead of every
         // 600ms (constant IPC/DB churn can stall frames on the kiosk).
-        autoScanTimer.current = setTimeout(() => handleRealScan(), EMPTY_SCAN_RETRY)
+        scheduleNext(EMPTY_SCAN_RETRY)
         return
       }
 
-      // Flicker fix: keep the idle screen mounted while the capture is waiting
-      // and just pulse an inline 'Scanning…' indicator.
-      if (currentState === 'idle' || currentState === 'no-match') {
-        setScanActive(true)
-      }
+      // Flicker fix: keep the current screen mounted while the capture is
+      // waiting and just pulse an inline 'Scanning…' indicator. Set in every
+      // state (idle, no-match, match-found, expired) so staff always see the
+      // reader is listening for the next member.
+      setScanActive(true)
 
       // Wait (up to 30s) for a finger on the reader.
       const capture = await window.electronAPI.captureFingerprint(30000)
       if (!capture.ok) {
         // timeout / cancelled / device error — back off before re-arming so a
         // fast-failing reader can't make the kiosk flicker between screens.
-        if ((currentState === 'idle' || currentState === 'no-match') && !inputOpenRef.current) {
-          autoScanTimer.current = setTimeout(() => handleRealScan(), RETRY_DELAY)
-        }
+        scheduleNext(RETRY_DELAY)
         return
       }
 
       // Convert the captured image to a probe template and identify 1:N.
       const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
       if ('error' in fmdRes) {
-        if ((currentState === 'idle' || currentState === 'no-match') && !inputOpenRef.current) {
-          autoScanTimer.current = setTimeout(() => handleRealScan(), RETRY_DELAY)
-        }
+        scheduleNext(RETRY_DELAY)
         return
       }
       const identifyRes = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, templates)
       if ('error' in identifyRes || identifyRes.index < 0 || identifyRes.index >= templates.length) {
-        // Finger scanned but not recognized in the system
+        // Finger scanned but not recognized in the system — show the no-match
+        // screen AND keep scanning (no 'Try Again' click needed).
         if (currentState === 'idle' || currentState === 'no-match') {
           setState('no-match')
         }
+        scheduleNext(RETRY_DELAY)
         return
       }
 
@@ -341,6 +375,7 @@ function Kiosk({ onRefresh }: KioskProps) {
       const member = await window.electronAPI.getMember(matched.member_id)
       if (!member) {
         setState('idle')
+        scheduleNext(RETRY_DELAY)
         return
       }
 
@@ -348,6 +383,9 @@ function Kiosk({ onRefresh }: KioskProps) {
 
       if (member.status === 'expired') {
         setState('expired')
+        // Keep scanning: a different member can still check in while this
+        // expired screen is showing.
+        scheduleNext(RETRY_DELAY)
       } else {
         // Log the check-in — may be blocked by session-pack or duplicate-check-in rules
         const result = await window.electronAPI.createCheckin({
@@ -369,15 +407,15 @@ function Kiosk({ onRefresh }: KioskProps) {
           log.checkinFingerprint(member.id, member.name)
           notifyCheckin(member)
           onRefresh()
+          // Re-arm immediately so the NEXT member can scan while this
+          // match-found modal is still on screen.
+          scheduleNext(AUTO_SCAN_DELAY)
         }
       }
     } catch (error: any) {
       console.error('Fingerprint scan error:', error.message || error)
-      // Only retry silently if nothing important is on screen
-      if ((stateRef.current === 'idle' || stateRef.current === 'no-match') && !inputOpenRef.current) {
-        autoScanTimer.current = setTimeout(() => handleRealScan(), RETRY_DELAY)
-      }
-      // else: stay on match-found/expired — don't dismiss the modal
+      // Always retry — continuous scanning even if a call fails
+      scheduleNext(RETRY_DELAY)
     } finally {
       setScanActive(false)
       isScanning.current = false
@@ -1052,6 +1090,10 @@ function Kiosk({ onRefresh }: KioskProps) {
           <span className="countdown-text">{countdown}</span>
         </div>
       </div>
+      <div className="kiosk-scan-next">
+        <span className={`kiosk-scan-dot${scanActive ? ' active' : ''}`} />
+        <span>{scanActive ? 'Scanning for next member…' : 'Ready for next scan'}</span>
+      </div>
       
       <div className="profile-card">
         <div className="profile-header">
@@ -1210,6 +1252,10 @@ function Kiosk({ onRefresh }: KioskProps) {
       <div className="no-match-icon">✕</div>
       <h2 className="display-text">No Match Found</h2>
       <p className="text-muted">Fingerprint not recognized in system</p>
+      <div className="kiosk-scan-next">
+        <span className={`kiosk-scan-dot${scanActive ? ' active' : ''}`} />
+        <span>{scanActive ? 'Scanning for next fingerprint…' : 'Scanning again…'}</span>
+      </div>
       <div className="no-match-actions">
         <button className="btn btn-primary" onClick={resetToIdle}>
           Try Again

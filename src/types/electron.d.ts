@@ -46,7 +46,7 @@ export interface ElectronAPI {
   createFingerprintFmd: (imageBase64: string) => Promise<{ fmdBase64: string } | { error: string }>
   identifyFingerprint: (fmdBase64: string, templates: { fmdBase64: string }[]) => Promise<{ index: number } | { error: string }>
   getAllFingerprintTemplates: () => Promise<FingerprintTemplateInfo[]>
-  saveFingerprint: (memberId: number, templateBase64: string, quality: number) => Promise<any>
+  replaceFingerprints: (memberId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) => Promise<{ success: boolean }>
 
   // Payments
   getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => Promise<Payment[]>

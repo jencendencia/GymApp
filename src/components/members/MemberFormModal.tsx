@@ -35,14 +35,33 @@ export interface PaymentFormData {
   transaction_ref: string
 }
 
-export interface FingerprintState {
-  scanning: boolean
-  captured: boolean
+/** One enrolled finger: its ANSI-378 template + capture quality. */
+export interface FingerprintSlot {
   /** Base64 ANSI-378 FMD template captured from the U.are.U reader */
   fmdBase64: string | null
   quality: number
+}
+
+/** Up to FINGER_SLOTS enrolled fingerprints per member (3-finger enrollment). */
+export interface FingerprintState {
+  /** True while a capture is in flight */
+  scanning: boolean
+  /** Which slot (0..FINGER_SLOTS-1) is being scanned */
+  scanningSlot: number
+  fingers: FingerprintSlot[]
   error: string | null
 }
+
+/** Number of fingerprints a member can enroll (index + middle + ring). */
+export const FINGER_SLOTS = 3
+
+/** Fresh, all-empty fingerprint state (create mode / reset). */
+export const emptyFingerprints = (): FingerprintState => ({
+  scanning: false,
+  scanningSlot: -1,
+  fingers: Array.from({ length: FINGER_SLOTS }, () => ({ fmdBase64: null, quality: 0 })),
+  error: null,
+})
 
 interface MemberFormModalProps {
   selectedMember: Member | null
@@ -80,8 +99,8 @@ interface MemberFormModalProps {
   onMemberIdChange: (value: string) => void
   onPhotoUpload: (e: React.ChangeEvent<HTMLInputElement>) => void
   onCameraCapture: () => void
-  onFingerprintScan: () => void
-  onRetakeFingerprint: () => void
+  onFingerprintScan: (slot: number) => void
+  onRetakeFingerprint: (slot: number) => void
   onPaymentStatus: (payment: Payment, status: 'voided' | 'refunded') => void
   /** Parent records waiver agreement (timestamp + activity log). */
   onWaiverAgree: () => void
@@ -178,48 +197,56 @@ function MemberFormModal(props: MemberFormModalProps) {
                 </div>
               </div>
 
-              {/* Fingerprint Registration - native U.are.U 4500 */}
+              {/* Fingerprint Registration — up to 3 fingers, native U.are.U 4500 */}
               <div className="enrollment-card">
-                <label className="section-label">Fingerprint Registration</label>
+                <label className="section-label">
+                  Fingerprint Registration
+                  <span className="fingerprint-count">{fingerprint.fingers.filter(f => f.fmdBase64).length}/{FINGER_SLOTS}</span>
+                </label>
                 <div className="fingerprint-container">
-                  {fingerprint.captured ? (
-                    <div className="fingerprint-captured">
-                      <div className="fingerprint-success-icon">✓</div>
-                      <span className="fingerprint-status success">Fingerprint Registered</span>
-                      <span className="fingerprint-hint">
-                        The member can now check in at the kiosk by placing this finger on the U.R.U. 4500 reader.
-                      </span>
-                      <button type="button" className="btn btn-secondary btn-sm" onClick={onRetakeFingerprint}>Retake</button>
-                    </div>
-                  ) : fingerprint.scanning ? (
-                    <div className="fingerprint-scanning">
-                      <div className="fingerprint-animation">
-                        <div className="scan-ring ring-1" />
-                        <div className="scan-ring ring-2" />
-                        <div className="scan-ring ring-3" />
-                        <div className="fingerprint-icon-pulse">👆</div>
-                      </div>
-                      <span className="fingerprint-status">Waiting for fingerprint...</span>
-                      <span className="fingerprint-hint">
-                        Ask the member to hold their finger flat on the U.R.U. 4500 reader and lift after the beep.
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="fingerprint-idle">
-                      <div className="fingerprint-icon-large">👆</div>
-                      <span className="fingerprint-status">Register member's fingerprint</span>
-                      <span className="fingerprint-hint">Scans directly from the DigitalPersona U.R.U. 4500 reader</span>
-                      <div className="fingerprint-steps">
-                        <ol>
-                          <li>Make sure the <strong>U.R.U. 4500</strong> is plugged in (see Settings → Fingerprint Scanner).</li>
-                          <li>Click <strong>Start Registration</strong> below.</li>
-                          <li>Ask the member to <strong>place their finger</strong> on the reader and lift after the beep.</li>
-                        </ol>
-                      </div>
-                      {fingerprint.error && <span className="fingerprint-error">{fingerprint.error}</span>}
-                      <button type="button" className="btn btn-primary btn-sm" onClick={onFingerprintScan}>🔍 Start Registration</button>
-                    </div>
-                  )}
+                  <div className="fingerprint-slots">
+                    {fingerprint.fingers.map((slot, i) => {
+                      const scanningThis = fingerprint.scanning && fingerprint.scanningSlot === i
+                      return (
+                        <div key={i} className={`fingerprint-slot${slot.fmdBase64 ? ' captured' : ''}${scanningThis ? ' scanning' : ''}`}>
+                          <div className="fingerprint-slot-head">
+                            <span className={`fingerprint-slot-dot${slot.fmdBase64 ? ' filled' : ''}`} />
+                            <span className="fingerprint-slot-label">Finger {i + 1}</span>
+                            {slot.fmdBase64 && <span className="fingerprint-slot-check">✓</span>}
+                          </div>
+                          {scanningThis ? (
+                            <div className="fingerprint-scanning">
+                              <div className="fingerprint-animation">
+                                <div className="scan-ring ring-1" />
+                                <div className="scan-ring ring-2" />
+                                <div className="scan-ring ring-3" />
+                                <div className="fingerprint-icon-pulse">👆</div>
+                              </div>
+                              <span className="fingerprint-status">Waiting for fingerprint...</span>
+                              <span className="fingerprint-hint">Hold finger flat, lift after the beep.</span>
+                            </div>
+                          ) : slot.fmdBase64 ? (
+                            <div className="fingerprint-captured">
+                              <span className="fingerprint-status success">Registered</span>
+                              <span className="fingerprint-hint">Ready for kiosk check-in.</span>
+                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onRetakeFingerprint(i)} disabled={fingerprint.scanning}>Retake</button>
+                            </div>
+                          ) : (
+                            <div className="fingerprint-idle">
+                              <span className="fingerprint-hint">Optional — enroll to enable fingerprint check-in.</span>
+                              <button type="button" className="btn btn-primary btn-sm" onClick={() => onFingerprintScan(i)} disabled={fingerprint.scanning}>
+                                🔍 Register
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {fingerprint.error && <span className="fingerprint-error">{fingerprint.error}</span>}
+                  <span className="fingerprint-hint">
+                    Enrolling up to {FINGER_SLOTS} fingers lets the member check in even if one finger is dirty or injured.
+                  </span>
                 </div>
               </div>
             </div>

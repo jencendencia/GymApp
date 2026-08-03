@@ -1717,11 +1717,32 @@ function setupIPC() {
   // Fingerprint templates. template is the base64 ANSI-378 FMD produced by the
   // native U.are.U SDK path (legacy WebAuthn hex credential IDs are also valid
   // base64 of the raw bytes, so this stays compatible).
-  ipcMain.handle('save-fingerprint', (_, memberId: number, templateBase64: string, quality: number) => {
-    return db?.prepare(`
-      INSERT INTO fingerprint_templates (member_id, template, quality)
-      VALUES (?, ?, ?)
-    `).run(memberId, Buffer.from(String(templateBase64 || ''), 'base64'), quality || 0)
+
+
+  // Replace a member's fingerprint templates in one call (3-finger
+  // enrollment). Deletes the member's existing templates, then inserts the new
+  // list — so re-enrolling replaces old fingers instead of accumulating rows.
+  // Each entry: { fmdBase64: string, quality?: number }.
+  ipcMain.handle('replace-fingerprints', (event, memberId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) => {
+    if (!memberId || !Array.isArray(fingerprints)) return { success: false }
+    // Atomic replace: delete + insert inside one transaction so a mid-way
+    // failure can never leave a member with zero templates.
+    try {
+      const replace = db!.transaction(() => {
+        db!.prepare('DELETE FROM fingerprint_templates WHERE member_id = ?').run(memberId)
+        const ins = db!.prepare('INSERT INTO fingerprint_templates (member_id, template, quality) VALUES (?, ?, ?)')
+        for (const fp of fingerprints) {
+          if (!fp?.fmdBase64) continue
+          ins.run(memberId, Buffer.from(String(fp.fmdBase64), 'base64'), Number(fp.quality) || 0)
+        }
+      })
+      replace()
+    } catch (error: any) {
+      logMain('error', 'replace-fingerprints failed', { memberId, error: error.message })
+      return { success: false }
+    }
+    broadcastDataChanged(event.sender)
+    return { success: true }
   })
 
   // Payments

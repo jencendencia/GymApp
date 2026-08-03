@@ -9,7 +9,7 @@ import { notifyDataChanged, useDataVersion } from '../lib/data'
 import { getCurrencySymbol } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
 import MembersTable from './members/MembersTable'
-import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState } from './members/MemberFormModal'
+import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState, FINGER_SLOTS, emptyFingerprints } from './members/MemberFormModal'
 import NewPlanModal, { NewPlanData, NewPlanPayment } from './members/NewPlanModal'
 import { QrCodeModal, IdCardModal } from './members/MemberModals'
 
@@ -37,13 +37,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [idCardPrinting, setIdCardPrinting] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
-  const [fingerprint, setFingerprint] = useState<FingerprintState>({
-    scanning: false,
-    captured: false,
-    fmdBase64: null,
-    quality: 0,
-    error: null,
-  })
+  const [fingerprint, setFingerprint] = useState<FingerprintState>(emptyFingerprints())
   const [waiverAgreed, setWaiverAgreed] = useState(false)
   const [waiverAgreedAt, setWaiverAgreedAt] = useState<string | null>(null)
   const [validationAttempted, setValidationAttempted] = useState(false)
@@ -303,26 +297,29 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   // Native fingerprint enrollment via the U.are.U 4500 (DigitalPersona SDK).
   // Captures a finger directly from the reader, converts the image to an
   // ANSI-378 template, and stores it in the app DB — unlimited members, no
-  // Windows Hello, no passkey dialogs.
-  const handleFingerprintScan = async () => {
-    if (fingerprint.captured) return
+  // Windows Hello, no passkey dialogs. Members can enroll up to FINGER_SLOTS
+  // fingers (index + middle + ring) so the kiosk can still match them if one
+  // finger is dirty, injured, or poorly scanned.
+  const handleFingerprintScan = async (slot: number) => {
+    if (fingerprint.scanning) return
+    // Already enrolled in this slot — no need to re-scan unless retaken
+    if (fingerprint.fingers[slot]?.fmdBase64) return
 
     // Set the scanning state first so the button unmounts and a fast double-click
     // can't fire two concurrent captures.
-    setFingerprint({ scanning: true, captured: false, fmdBase64: null, quality: 0, error: null })
+    setFingerprint(prev => ({ ...prev, scanning: true, scanningSlot: slot, error: null }))
 
     try {
       // Pre-flight: confirm the reader is connected before opening the capture.
       const status = await window.electronAPI.getFingerprintStatus()
       if (!status.available) {
         const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
-        setFingerprint({
+        setFingerprint(prev => ({
+          ...prev,
           scanning: false,
-          captured: false,
-          fmdBase64: null,
-          quality: 0,
+          scanningSlot: -1,
           error: detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).',
-        })
+        }))
         return
       }
 
@@ -334,38 +331,48 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           : capture.reason === 'cancelled'
             ? 'Registration cancelled.'
             : capture.message || 'Fingerprint capture failed.'
-        setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: msg })
+        setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: msg }))
         return
       }
 
       // Convert the captured image to an ANSI-378 template for storage.
       const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
       if ('error' in fmdRes) {
-        setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: fmdRes.error })
+        setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: fmdRes.error }))
         return
       }
 
-      setFingerprint({
-        scanning: false,
-        captured: true,
-        fmdBase64: fmdRes.fmdBase64,
-        quality: capture.sample.qualityCode || 0,
-        error: null,
+      setFingerprint(prev => {
+        const fingers = prev.fingers.map((f, i) =>
+          i === slot ? { fmdBase64: fmdRes.fmdBase64, quality: capture.sample.qualityCode || 0 } : f
+        )
+        return { ...prev, scanning: false, scanningSlot: -1, fingers, error: null }
       })
     } catch (error: any) {
       console.error('Fingerprint registration error:', error)
-      setFingerprint({
-        scanning: false,
-        captured: false,
-        fmdBase64: null,
-        quality: 0,
-        error: error.message || 'Registration failed',
-      })
+      setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: error.message || 'Registration failed' }))
     }
   }
 
-  const handleRetakeFingerprint = () => {
-    setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: null })
+  const handleRetakeFingerprint = (slot: number) => {
+    if (fingerprint.scanning) return
+    setFingerprint(prev => ({
+      ...prev,
+      fingers: prev.fingers.map((f, i) => (i === slot ? { fmdBase64: null, quality: 0 } : f)),
+      error: null,
+    }))
+  }
+
+  // Persist every captured fingerprint for a member (replaces their old set —
+  // re-enrolling swaps fingers instead of accumulating rows).
+  const saveEnrolledFingerprints = async (memberId: number, memberName: string) => {
+    const enrolled = fingerprint.fingers.filter(f => f.fmdBase64)
+    if (enrolled.length === 0) return
+    await window.electronAPI.replaceFingerprints(
+      memberId,
+      enrolled.map(f => ({ fmdBase64: f.fmdBase64!, quality: f.quality || 0 }))
+    )
+    log.registerFingerprint(memberId, memberName)
   }
 
   // Required-field validation for the member form
@@ -445,10 +452,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       // Get the numeric ID of the newly created member
       const newNumericId = result?.lastInsertRowid ? Number(result.lastInsertRowid) : 0
 
-      // Save the fingerprint template if captured
-      if (fingerprint.captured && fingerprint.fmdBase64) {
-        await window.electronAPI.saveFingerprint(newNumericId, fingerprint.fmdBase64, fingerprint.quality || 0)
-        if (newNumericId) log.registerFingerprint(newNumericId, formData.name)
+      // Save the enrolled fingerprint templates (up to 3) if any were captured
+      if (newNumericId) {
+        await saveEnrolledFingerprints(newNumericId, formData.name)
       }
 
       // Process the required payment
@@ -550,11 +556,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         waiver_agreed_at: waiverAgreedAt || undefined,
       })
 
-      // Update fingerprint template if newly captured
-      if (fingerprint.captured && fingerprint.fmdBase64) {
-        await window.electronAPI.saveFingerprint(selectedMember.id, fingerprint.fmdBase64, fingerprint.quality || 0)
-        log.registerFingerprint(selectedMember.id, formData.name)
-      }
+      // Update fingerprint templates if any were captured (replaces the old set)
+      await saveEnrolledFingerprints(selectedMember.id, formData.name)
 
       setShowForm(false)
       setSelectedMember(null)
@@ -634,7 +637,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       photo: '',
     })
     setPhotoPreview(null)
-    setFingerprint({ scanning: false, captured: false, fmdBase64: null, quality: 0, error: null })
+    setFingerprint(emptyFingerprints())
     setWaiverAgreed(false)
     setWaiverAgreedAt(null)
     setValidationAttempted(false)
@@ -806,6 +809,24 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setShakeKey(0)
     setShowForm(true)
     loadMemberPayments(member.id)
+    loadMemberFingerprints(member.id)
+  }
+
+  // Pre-fill the fingerprint slots with the member's currently enrolled
+  // templates (edit mode) so staff can see which fingers are registered and
+  // retake any of them — saving then replaces the old set via replaceFingerprints.
+  const loadMemberFingerprints = async (memberId: number) => {
+    try {
+      const all = await window.electronAPI.getAllFingerprintTemplates()
+      const mine = all.filter(t => t.member_id === memberId).slice(0, FINGER_SLOTS)
+      const fingers = Array.from({ length: FINGER_SLOTS }, (_, i) => ({
+        fmdBase64: mine[i]?.fmdBase64 || null,
+        quality: 0,
+      }))
+      setFingerprint({ scanning: false, scanningSlot: -1, fingers, error: null })
+    } catch {
+      // Leave slots empty — enrollment is optional anyway
+    }
   }
 
   // Load payment history when the edit modal opens

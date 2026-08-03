@@ -639,6 +639,30 @@
   flex: 1;
 }
 
+/* 'Scanning for next member' indicator — shown on the match-found and
+   no-match screens so staff can see the reader is still listening while a
+   confirmation or no-match screen is up (continuous scanning). */
+.kiosk-scan-next {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, #2a2d35);
+  border-radius: 999px;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.kiosk-profile .kiosk-scan-next {
+  margin-top: 8px;
+}
+
 /* No Match State */
 .kiosk-no-match {
   display: flex;

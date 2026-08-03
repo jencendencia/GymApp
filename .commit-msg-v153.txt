@@ -1,0 +1,13 @@
+feat: 3-finger enrollment, continuous kiosk scanning, auto-rescan (v1.5.3)
+
+- Enroll up to 3 fingerprints per member via new 3-slot UI; batch-saved with
+  atomic replace-fingerprints IPC (transactional delete+insert, re-enroll
+  replaces old set)
+- Load existing enrolled fingers when editing a member so staff can retake
+  individual fingers
+- Kiosk fingerprint scanner is now self-scheduling: re-arms in every state
+  (idle, match-found, no-match, expired) so the next member can scan while the
+  match-found modal is open — no 10s wait
+- No-match auto-rescans without clicking Try Again
+- Mount guard prevents scan loop from re-arming on an unmounted kiosk window
+- Remove dead single-finger save-fingerprint IPC/bridge
