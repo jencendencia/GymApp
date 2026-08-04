@@ -2062,7 +2062,7 @@ function setupIPC() {
     }
   })
 
-  ipcMain.handle('restore-backup', async (_, passwordArg?: string) => {
+ipcMain.handle('restore-backup', async (event, passwordArg?: string) => {
     try {
       if (!db) throw new Error('Database not initialized')
 
@@ -2158,24 +2158,27 @@ function setupIPC() {
         deserialized[table] = deserialize(rows)
       }
 
-      // Restore within a transaction
+// Restore within a transaction.
+      // NOTE: PRAGMA foreign_keys is a NO-OP inside a transaction in SQLite, so it
+      // must be toggled BEFORE the transaction begins (better-sqlite3's
+      // db.transaction() wraps the callback in BEGIN/COMMIT). The DELETE order below
+      // is also written child-first so it never violates FK constraints even if
+      // foreign_keys were still ON.
+      db!.pragma('foreign_keys = OFF')
       const restoreAll = db.transaction(() => {
-        // Disable foreign key checks during restore
-        db!.pragma('foreign_keys = OFF')
-
-// Clear existing data (order matters due to foreign keys)
-        db!.exec('DELETE FROM fingerprint_templates')
+// Clear existing data (order matters due to foreign keys — children before parents)
         db!.exec('DELETE FROM staff_fingerprints')
+        db!.exec('DELETE FROM fingerprint_templates')
         db!.exec('DELETE FROM checkins')
         db!.exec('DELETE FROM payments')
         db!.exec('DELETE FROM coach_fee_payments')
+        db!.exec('DELETE FROM reminders')
+        db!.exec('DELETE FROM activity_logs')
+        db!.exec('DELETE FROM guest_checkins')
         db!.exec('DELETE FROM members')
         db!.exec('DELETE FROM plans')
         db!.exec('DELETE FROM coaches')
         db!.exec('DELETE FROM staff')
-        db!.exec('DELETE FROM activity_logs')
-        db!.exec('DELETE FROM reminders')
-        db!.exec('DELETE FROM guest_checkins')
         db!.exec('DELETE FROM settings')
 
         // Helper to insert rows dynamically (preserves original IDs)
@@ -2202,14 +2205,15 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
         if (deserialized.staff_fingerprints) insertRows('staff_fingerprints', deserialized.staff_fingerprints)
         if (deserialized.activity_logs) insertRows('activity_logs', deserialized.activity_logs)
         if (deserialized.reminders) insertRows('reminders', deserialized.reminders)
-        if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest_checkins)
+if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest_checkins)
         if (deserialized.settings) insertRows('settings', deserialized.settings)
-
-        // Re-enable foreign key checks
-        db!.pragma('foreign_keys = ON')
       })
 
       restoreAll()
+
+      // Re-enable foreign key checks AFTER the transaction commits (a PRAGMA
+      // inside a transaction is a no-op in SQLite).
+      db!.pragma('foreign_keys = ON')
 
       // P1 4.5: extract the on-disk photos folder from the backup (if present)
       const photoEntries = zipEntries.filter(e => e.entryName.startsWith('photos/'))
@@ -2224,8 +2228,13 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
           }
         }
       }
-      // Re-run photo migration in case the backup stored legacy base64 photos
+// Re-run photo migration in case the backup stored legacy base64 photos
       migratePhotosToDisk()
+
+      // Notify every other window (and force this window to re-fetch) that the
+      // data changed, so the dashboard/lists refresh with the restored data
+      // instead of showing stale stats.
+      broadcastDataChanged(event.sender)
 
       return { success: true }
     } catch (error: any) {

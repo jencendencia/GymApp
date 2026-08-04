@@ -4,6 +4,7 @@ import { StaffUser, FingerprintStatus } from '../types/electron'
 import { log } from '../lib/logger'
 import ConfirmModal from './ConfirmModal'
 import { useSettings } from '../lib/settingsContext'
+import { notifyDataChanged } from '../lib/data'
 
 interface SettingsState {
   appName: string
@@ -311,6 +312,11 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         log.restoreBackup()
         // Reload settings after restore
         await loadSettings()
+        // Bump the local data bus so every page in THIS window (Members,
+        // Dashboard, Checkins, etc.) re-fetches the restored data. The main
+        // process already broadcasts to the OTHER windows via broadcastDataChanged(),
+        // but it excludes the sender (this Settings window), so we refresh here.
+        notifyDataChanged()
       } else if (result.reason === 'cancelled') {
         setBackupBanner({ type: 'none' })
       } else {
