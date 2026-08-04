@@ -3,6 +3,7 @@ import './Settings.css'
 import { StaffUser, FingerprintStatus } from '../types/electron'
 import { log } from '../lib/logger'
 import ConfirmModal from './ConfirmModal'
+import { useSettings } from '../lib/settingsContext'
 
 interface SettingsState {
   appName: string
@@ -51,6 +52,8 @@ type BannerState =
 
 function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUser?: StaffUser | null; onAppNameChange?: (name: string) => void; onAppLogoChange?: (logo: string) => void }) {
   const isAdmin = currentUser?.role === 'admin'
+  // P2 6.9: broadcast settings changes (e.g. showMemberPhotos) to every component
+  const { refreshSettings } = useSettings()
   const [settings, setSettings] = useState<SettingsState>({
     appName: 'REPCHECK',
     scannerEnabled: true,
@@ -186,6 +189,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         theme: settings.theme,
       })
       setSaved(true)
+      // Broadcast the new settings (showMemberPhotos, etc.) to the whole app
+      await refreshSettings()
       if (onAppNameChange) onAppNameChange(settings.appName)
       log.updateSettings({
         scannerEnabled: settings.scannerEnabled,

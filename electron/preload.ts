@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAllFingerprintTemplates: () => ipcRenderer.invoke('get-all-fingerprint-templates'),
   replaceFingerprints: (memberId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) =>
     ipcRenderer.invoke('replace-fingerprints', memberId, fingerprints),
+  getAllStaffFingerprintTemplates: () => ipcRenderer.invoke('get-all-staff-fingerprint-templates'),
+  replaceStaffFingerprints: (staffId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) =>
+    ipcRenderer.invoke('replace-staff-fingerprints', staffId, fingerprints),
 
   // Payments
   getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => ipcRenderer.invoke('get-payments', memberId, opts),

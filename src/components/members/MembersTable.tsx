@@ -1,6 +1,7 @@
 import React from 'react'
 import { Member } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
+import MemberAvatar from '../MemberAvatar'
 
 interface MembersTableProps {
   memberTab: 'all' | 'expiring'
@@ -61,12 +62,15 @@ function MembersTable(props: MembersTableProps) {
     </div>
   )
 
-  const renderPhoto = (member: Member) =>
-    member.photo ? (
-      <img src={member.photo} alt={member.name} className="member-table-photo" />
-    ) : (
-      <div className="member-table-avatar">{member.name.charAt(0)}</div>
-    )
+  // Honors the global "Show Member Photos" setting (P2 6.9) — falls back to initials when off
+  const renderPhoto = (member: Member) => (
+    <MemberAvatar
+      name={member.name}
+      photo={member.photo}
+      imgClassName="member-table-photo"
+      fallbackClassName="member-table-avatar"
+    />
+  )
 
   const renderWaiver = (member: Member) =>
     member.waiver_agreed_at ? (

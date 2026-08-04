@@ -108,6 +108,13 @@
   overflow: hidden;
 }
 
+.checkin-avatar-initial {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
 .checkin-photo {
   width: 100%;
   height: 100%;

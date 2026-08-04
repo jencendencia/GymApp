@@ -4,6 +4,7 @@ import { Checkin, GuestCheckin } from '../types/electron'
 import { todayLocal } from '../lib/dates'
 import { useDataVersion } from '../lib/data'
 import { log } from '../lib/logger'
+import MemberAvatar from './MemberAvatar'
 
 function Checkins() {
   const dataVersion = useDataVersion()
@@ -240,11 +241,13 @@ function Checkins() {
             {filteredCheckins.map((checkin) => (
               <div key={checkin.id} className="checkin-entry">
                 <div className="checkin-avatar">
-                  {checkin.member_photo ? (
-                    <img src={checkin.member_photo} alt={checkin.name || ''} className="checkin-photo" />
-                  ) : (
-                    checkin.name?.charAt(0).toUpperCase() || '?'
-                  )}
+                  {/* Honors the global "Show Member Photos" setting (P2 6.9) */}
+                  <MemberAvatar
+                    name={checkin.name || ''}
+                    photo={checkin.member_photo}
+                    imgClassName="checkin-photo"
+                    fallbackClassName="checkin-avatar-initial"
+                  />
                 </div>
                 <div className="checkin-details">
                   <div className="checkin-main">

@@ -9,9 +9,10 @@ import { notifyDataChanged, useDataVersion } from '../lib/data'
 import { getCurrencySymbol } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
 import MembersTable from './members/MembersTable'
-import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState, FINGER_SLOTS, emptyFingerprints } from './members/MemberFormModal'
+import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState, emptyFingerprints } from './members/MemberFormModal'
 import NewPlanModal, { NewPlanData, NewPlanPayment } from './members/NewPlanModal'
 import { QrCodeModal, IdCardModal } from './members/MemberModals'
+import { ENROLL_STEPS, FingerprintSlotData } from './FingerprintEnrollment'
 
 // Payment methods that require a transaction reference number
 const METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card']
@@ -295,72 +296,26 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   }
 
   // Native fingerprint enrollment via the U.are.U 4500 (DigitalPersona SDK).
-  // Captures a finger directly from the reader, converts the image to an
-  // ANSI-378 template, and stores it in the app DB — unlimited members, no
-  // Windows Hello, no passkey dialogs. Members can enroll up to FINGER_SLOTS
-  // fingers (index + middle + ring) so the kiosk can still match them if one
-  // finger is dirty, injured, or poorly scanned.
-  const handleFingerprintScan = async (slot: number) => {
-    if (fingerprint.scanning) return
-    // Already enrolled in this slot — no need to re-scan unless retaken
-    if (fingerprint.fingers[slot]?.fmdBase64) return
-
-    // Set the scanning state first so the button unmounts and a fast double-click
-    // can't fire two concurrent captures.
-    setFingerprint(prev => ({ ...prev, scanning: true, scanningSlot: slot, error: null }))
-
-    try {
-      // Pre-flight: confirm the reader is connected before opening the capture.
-      const status = await window.electronAPI.getFingerprintStatus()
-      if (!status.available) {
-        const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
-        setFingerprint(prev => ({
-          ...prev,
-          scanning: false,
-          scanningSlot: -1,
-          error: detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).',
-        }))
-        return
-      }
-
-      // Wait (up to 30s) for a finger on the reader.
-      const capture = await window.electronAPI.captureFingerprint(30000)
-      if (!capture.ok) {
-        const msg = capture.reason === 'timeout'
-          ? 'No finger detected. Ask the member to place their finger on the U.R.U. 4500 and try again.'
-          : capture.reason === 'cancelled'
-            ? 'Registration cancelled.'
-            : capture.message || 'Fingerprint capture failed.'
-        setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: msg }))
-        return
-      }
-
-      // Convert the captured image to an ANSI-378 template for storage.
-      const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
-      if ('error' in fmdRes) {
-        setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: fmdRes.error }))
-        return
-      }
-
-      setFingerprint(prev => {
-        const fingers = prev.fingers.map((f, i) =>
-          i === slot ? { fmdBase64: fmdRes.fmdBase64, quality: capture.sample.qualityCode || 0 } : f
-        )
-        return { ...prev, scanning: false, scanningSlot: -1, fingers, error: null }
-      })
-    } catch (error: any) {
-      console.error('Fingerprint registration error:', error)
-      setFingerprint(prev => ({ ...prev, scanning: false, scanningSlot: -1, error: error.message || 'Registration failed' }))
+  // Captures ONE finger for the shared 3-tap enrollment flow: pre-flights the
+  // reader, waits (up to 30s) for a tap, converts the image to an ANSI-378
+  // template. Resolves null when the user cancelled / no finger was placed
+  // (silent), and throws a friendly Error for fatal failures so the enrollment
+  // UI can surface it. Unlimited members, no Windows Hello, no passkey dialogs.
+  const captureFingerOnce = async (): Promise<FingerprintSlotData | null> => {
+    const status = await window.electronAPI.getFingerprintStatus()
+    if (!status.available) {
+      const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
+      throw new Error(detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).')
     }
-  }
 
-  const handleRetakeFingerprint = (slot: number) => {
-    if (fingerprint.scanning) return
-    setFingerprint(prev => ({
-      ...prev,
-      fingers: prev.fingers.map((f, i) => (i === slot ? { fmdBase64: null, quality: 0 } : f)),
-      error: null,
-    }))
+    // Wait (up to 30s) for a finger on the reader.
+    const capture = await window.electronAPI.captureFingerprint(30000)
+    if (!capture.ok) return null // timeout / cancelled / device — silent
+
+    // Convert the captured image to an ANSI-378 template for storage.
+    const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
+    if ('error' in fmdRes) throw new Error(fmdRes.error)
+    return { fmdBase64: fmdRes.fmdBase64, quality: capture.sample.qualityCode || 0 }
   }
 
   // Persist every captured fingerprint for a member (replaces their old set —
@@ -818,8 +773,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const loadMemberFingerprints = async (memberId: number) => {
     try {
       const all = await window.electronAPI.getAllFingerprintTemplates()
-      const mine = all.filter(t => t.member_id === memberId).slice(0, FINGER_SLOTS)
-      const fingers = Array.from({ length: FINGER_SLOTS }, (_, i) => ({
+      const mine = all.filter(t => t.member_id === memberId).slice(0, ENROLL_STEPS)
+      const fingers = Array.from({ length: ENROLL_STEPS }, (_, i) => ({
         fmdBase64: mine[i]?.fmdBase64 || null,
         quality: 0,
       }))
@@ -1154,7 +1109,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           paymentForm={paymentForm}
           onPaymentFormChange={setPaymentForm}
           photoPreview={photoPreview}
-          fingerprint={fingerprint}
+          initialFingers={fingerprint.fingers}
+          captureFinger={captureFingerOnce}
+          onFingerprintsChange={(fingers) => setFingerprint(prev => ({ ...prev, fingers, error: null }))}
           waiverAgreed={waiverAgreed}
           waiverAgreedAt={waiverAgreedAt}
           validationAttempted={validationAttempted}
@@ -1173,8 +1130,6 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           onMemberIdChange={handleMemberIdChange}
           onPhotoUpload={handlePhotoUpload}
           onCameraCapture={handleCameraCapture}
-          onFingerprintScan={handleFingerprintScan}
-          onRetakeFingerprint={handleRetakeFingerprint}
           onPaymentStatus={handlePaymentStatus}
           onWaiverAgree={() => {
             setWaiverAgreed(true)

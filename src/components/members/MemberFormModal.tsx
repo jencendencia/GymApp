@@ -3,6 +3,7 @@ import { Member, Plan, Coach, Payment } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
 import { todayLocal, planEndDate } from '../../lib/dates'
 import WaiverModal from './WaiverModal'
+import FingerprintEnrollment, { ENROLL_STEPS, FingerprintSlotData } from '../FingerprintEnrollment'
 
 // Payment methods that require a transaction reference number
 const METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card']
@@ -53,7 +54,7 @@ export interface FingerprintState {
 }
 
 /** Number of fingerprints a member can enroll (index + middle + ring). */
-export const FINGER_SLOTS = 3
+export const FINGER_SLOTS = ENROLL_STEPS
 
 /** Fresh, all-empty fingerprint state (create mode / reset). */
 export const emptyFingerprints = (): FingerprintState => ({
@@ -72,7 +73,12 @@ interface MemberFormModalProps {
   paymentForm: PaymentFormData
   onPaymentFormChange: (p: PaymentFormData | ((prev: PaymentFormData) => PaymentFormData)) => void
   photoPreview: string | null
-  fingerprint: FingerprintState
+  /** Currently enrolled fingerprint slots (pre-fill for edit mode). */
+  initialFingers: FingerprintSlotData[]
+  /** Capture one finger from the U.are.U reader; null = cancelled/timeout. */
+  captureFinger: () => Promise<FingerprintSlotData | null>
+  /** Fired on every successful capture / clear with the full slot set. */
+  onFingerprintsChange: (fingers: FingerprintSlotData[]) => void
   waiverAgreed: boolean
   waiverAgreedAt: string | null
   validationAttempted: boolean
@@ -99,8 +105,6 @@ interface MemberFormModalProps {
   onMemberIdChange: (value: string) => void
   onPhotoUpload: (e: React.ChangeEvent<HTMLInputElement>) => void
   onCameraCapture: () => void
-  onFingerprintScan: (slot: number) => void
-  onRetakeFingerprint: (slot: number) => void
   onPaymentStatus: (payment: Payment, status: 'voided' | 'refunded') => void
   /** Parent records waiver agreement (timestamp + activity log). */
   onWaiverAgree: () => void
@@ -112,10 +116,11 @@ interface MemberFormModalProps {
 function MemberFormModal(props: MemberFormModalProps) {
   const {
     selectedMember, plans, coaches, formData, onFormDataChange, paymentForm, onPaymentFormChange,
-    photoPreview, fingerprint, waiverAgreed, waiverAgreedAt, validationAttempted, shakeKey, missingRequired,
+    photoPreview, initialFingers, captureFinger, onFingerprintsChange, waiverAgreed, waiverAgreedAt,
+    validationAttempted, shakeKey, missingRequired,
     memberIdWarning, checkingMemberId, lastMemberId, lastMemberIdLoaded,
     memberPayments, paymentsLoading, isAdmin, autoRenew, onAutoRenewChange, refs, onMemberIdChange,
-    onPhotoUpload, onCameraCapture, onFingerprintScan, onRetakeFingerprint, onPaymentStatus, onWaiverAgree, onSubmit, onClose,
+    onPhotoUpload, onCameraCapture, onPaymentStatus, onWaiverAgree, onSubmit, onClose,
   } = props
 
   const [showWaiverModal, setShowWaiverModal] = React.useState(false)
@@ -197,57 +202,18 @@ function MemberFormModal(props: MemberFormModalProps) {
                 </div>
               </div>
 
-              {/* Fingerprint Registration — up to 3 fingers, native U.are.U 4500 */}
+              {/* Fingerprint Registration — Windows Hello-style 3-tap enrollment (P2 6.9) */}
               <div className="enrollment-card">
                 <label className="section-label">
                   Fingerprint Registration
-                  <span className="fingerprint-count">{fingerprint.fingers.filter(f => f.fmdBase64).length}/{FINGER_SLOTS}</span>
+                  <span className="fingerprint-count">{initialFingers.filter(f => f.fmdBase64).length}/{ENROLL_STEPS}</span>
                 </label>
-                <div className="fingerprint-container">
-                  <div className="fingerprint-slots">
-                    {fingerprint.fingers.map((slot, i) => {
-                      const scanningThis = fingerprint.scanning && fingerprint.scanningSlot === i
-                      return (
-                        <div key={i} className={`fingerprint-slot${slot.fmdBase64 ? ' captured' : ''}${scanningThis ? ' scanning' : ''}`}>
-                          <div className="fingerprint-slot-head">
-                            <span className={`fingerprint-slot-dot${slot.fmdBase64 ? ' filled' : ''}`} />
-                            <span className="fingerprint-slot-label">Finger {i + 1}</span>
-                            {slot.fmdBase64 && <span className="fingerprint-slot-check">✓</span>}
-                          </div>
-                          {scanningThis ? (
-                            <div className="fingerprint-scanning">
-                              <div className="fingerprint-animation">
-                                <div className="scan-ring ring-1" />
-                                <div className="scan-ring ring-2" />
-                                <div className="scan-ring ring-3" />
-                                <div className="fingerprint-icon-pulse">👆</div>
-                              </div>
-                              <span className="fingerprint-status">Waiting for fingerprint...</span>
-                              <span className="fingerprint-hint">Hold finger flat, lift after the beep.</span>
-                            </div>
-                          ) : slot.fmdBase64 ? (
-                            <div className="fingerprint-captured">
-                              <span className="fingerprint-status success">Registered</span>
-                              <span className="fingerprint-hint">Ready for kiosk check-in.</span>
-                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onRetakeFingerprint(i)} disabled={fingerprint.scanning}>Retake</button>
-                            </div>
-                          ) : (
-                            <div className="fingerprint-idle">
-                              <span className="fingerprint-hint">Optional — enroll to enable fingerprint check-in.</span>
-                              <button type="button" className="btn btn-primary btn-sm" onClick={() => onFingerprintScan(i)} disabled={fingerprint.scanning}>
-                                🔍 Register
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                  {fingerprint.error && <span className="fingerprint-error">{fingerprint.error}</span>}
-                  <span className="fingerprint-hint">
-                    Enrolling up to {FINGER_SLOTS} fingers lets the member check in even if one finger is dirty or injured.
-                  </span>
-                </div>
+                <FingerprintEnrollment
+                  initialFingers={initialFingers}
+                  captureFinger={captureFinger}
+                  onEnrolled={onFingerprintsChange}
+                  hint="Tap the finger 3 times to finish enrollment. Registered fingerprints are used for kiosk login and check-in."
+                />
               </div>
             </div>
 

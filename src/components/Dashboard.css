@@ -402,10 +402,15 @@
   overflow: hidden;
 }
 
-.dash-active-avatar img {
+.dash-active-avatar img,
+.dash-active-avatar .dash-active-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.dash-active-avatar .dash-avatar-initial {
+  font-weight: 600;
 }
 
 .dash-active-info {

@@ -1,10 +1,23 @@
-import { CreateActivityLogInput } from '../types/electron'
+import { CreateActivityLogInput, StaffUser } from '../types/electron'
 
-// Track the currently logged-in user so activity logs show who did what (P2 5.6)
-let currentUser: string | null = null
+// Track the currently logged-in user so activity logs show who did what (P2 5.6).
+// The FULL session identity (username + display name + role) is kept so the
+// audit trail resolves the real actor: an admin's full name + role, never a
+// generic "staff" label (P2 6.9 / Activity Log identity fix).
+let currentUser: { username: string; displayName?: string; role?: string } | null = null
 
-export function setLogUser(username: string | null) {
-  currentUser = username
+export function setLogUser(user: StaffUser | null) {
+  currentUser = user
+    ? { username: user.username, displayName: user.display_name, role: user.role }
+    : null
+}
+
+// "Display Name (Role)" with a username fallback — e.g. "Joel Encendencia (Admin)".
+function actorLabel(): string {
+  if (!currentUser) return ''
+  const name = currentUser.displayName || currentUser.username
+  const role = currentUser.role === 'admin' ? 'Admin' : currentUser.role === 'staff' ? 'Staff' : ''
+  return role ? `${name} (${role})` : name
 }
 
 /**
@@ -16,7 +29,9 @@ export const log = {
     try {
       await window.electronAPI.createActivityLog({
         ...input,
-        user: currentUser || input.user || 'staff',
+        // Resolve the authenticated session identity first; fall back to the
+        // caller-provided user, then to 'Kiosk' for scans with no session.
+        user: actorLabel() || input.user || 'Kiosk',
       })
     } catch (error) {
       console.error('Failed to log activity:', error)

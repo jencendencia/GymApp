@@ -4,6 +4,7 @@ import { ActiveCheckin, TodayStats, Member, AtRiskMember, GuestCheckin } from '.
 import { useDataVersion } from '../lib/data'
 import { useToast } from '../lib/toast'
 import { log } from '../lib/logger'
+import MemberAvatar from './MemberAvatar'
 
 interface DashboardProps {
   stats: TodayStats
@@ -374,11 +375,13 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
                 {activeCheckins.slice(0, 5).map((checkin) => (
                   <div key={checkin.id} className={`dash-active-item${justCheckedIn.has(checkin.id) ? ' just-now' : ''}`}>
                     <div className="dash-active-avatar">
-                      {checkin.member_photo ? (
-                        <img src={checkin.member_photo} alt="" />
-                      ) : (
-                        checkin.name?.charAt(0).toUpperCase() || '?'
-                      )}
+                      {/* Honors the global "Show Member Photos" setting (P2 6.9) */}
+                      <MemberAvatar
+                        name={checkin.name || ''}
+                        photo={checkin.member_photo}
+                        imgClassName="dash-active-img"
+                        fallbackClassName="dash-avatar-initial"
+                      />
                     </div>
                     <div className="dash-active-info">
                       <span className="dash-active-name">{checkin.name}</span>

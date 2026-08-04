@@ -40,6 +40,9 @@ const ACTION_META: Record<string, { label: string; icon: string; category: Actio
   waiver_signed: { label: 'Waiver Signed', icon: '📄', category: 'member', verb: 'signed waiver for' },
   create_backup: { label: 'Backup Created', icon: '📦', category: 'settings', verb: 'created backup' },
   restore_backup: { label: 'Backup Restored', icon: '🔄', category: 'settings', verb: 'restored backup' },
+  // P2 6.9: staff/admin biometric auth (fingerprint login / kiosk executive access / override authorization)
+  staff_fingerprint_auth: { label: 'Staff Fingerprint Auth', icon: '🔐', category: 'settings', verb: 'authenticated via fingerprint' },
+  register_staff_fingerprint: { label: 'Staff Fingerprint Registered', icon: '🖐️', category: 'settings', verb: 'registered fingerprint for' },
 }
 
 function ActivityLog() {
@@ -194,6 +197,14 @@ function ActivityLog() {
         return details.name || ''
       case 'create_backup':
         return details.path || ''
+      case 'staff_fingerprint_auth':
+        return details.context === 'override' && details.member_name
+          ? `${details.staff_name || ''} · override for ${details.member_name}`
+          : details.context === 'exec_report'
+            ? `${details.staff_name || ''} · executive report`
+            : details.staff_name || ''
+      case 'register_staff_fingerprint':
+        return details.staff_name || ''
       default:
         return JSON.stringify(details)
     }

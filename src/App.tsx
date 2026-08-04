@@ -20,6 +20,7 @@ import { setLogUser } from './lib/logger'
 import { todayLocal } from './lib/dates'
 import { setCurrencySymbol } from './lib/format'
 import { useDataVersion, notifyDataChanged } from './lib/data'
+import { SettingsProvider } from './lib/settingsContext'
 
 type Screen = 'kiosk' | 'members' | 'coach' | 'plans' | 'checkins' | 'activitylog' | 'reports' | 'settings' | 'users'
 
@@ -103,7 +104,7 @@ function App() {
 
   const handleLogin = (user: StaffUser) => {
     setLoggedInUser(user)
-    setLogUser(user.username)
+    setLogUser(user)
     setActiveScreen('kiosk')
   }
 
@@ -244,21 +245,25 @@ function App() {
   // Waiting for activation check
   if (activated === null) {
     return (
-      <div className="app">
-        <div className="activation-loading-screen">
-          <div className="spinner" />
-          <p>Checking license...</p>
+      <SettingsProvider>
+        <div className="app">
+          <div className="activation-loading-screen">
+            <div className="spinner" />
+            <p>Checking license...</p>
+          </div>
         </div>
-      </div>
+      </SettingsProvider>
     )
   }
 
   // Not activated — show activation screen
   if (!activated) {
     return (
-      <div className="app">
-        <Activation />
-      </div>
+      <SettingsProvider>
+        <div className="app">
+          <Activation />
+        </div>
+      </SettingsProvider>
     )
   }
 
@@ -266,22 +271,27 @@ function App() {
   // If in kiosk mode (separate window on external monitor), render only the kiosk — no chrome
   if (isKioskMode()) {
     return (
-      <div className="app app-kiosk-mode">
-        <Kiosk onRefresh={() => {}} />
-      </div>
+      <SettingsProvider>
+        <div className="app app-kiosk-mode">
+          <Kiosk onRefresh={() => {}} />
+        </div>
+      </SettingsProvider>
     )
   }
 
   // Not logged in — show login screen
   if (!loggedInUser) {
     return (
-      <div className="app">
-        <Login onLogin={handleLogin} />
-      </div>
+      <SettingsProvider>
+        <div className="app">
+          <Login onLogin={handleLogin} />
+        </div>
+      </SettingsProvider>
     )
   }
 
   return (
+    <SettingsProvider>
     <div className="app">
       {showGlobalSearch && loggedInUser && (
         <GlobalSearch
@@ -334,6 +344,7 @@ function App() {
         )}
       </div>
     </div>
+    </SettingsProvider>
   )
 }
 

@@ -47,6 +47,8 @@ export interface ElectronAPI {
   identifyFingerprint: (fmdBase64: string, templates: { fmdBase64: string }[]) => Promise<{ index: number } | { error: string }>
   getAllFingerprintTemplates: () => Promise<FingerprintTemplateInfo[]>
   replaceFingerprints: (memberId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) => Promise<{ success: boolean }>
+  getAllStaffFingerprintTemplates: () => Promise<StaffFingerprintTemplateInfo[]>
+  replaceStaffFingerprints: (staffId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) => Promise<{ success: boolean }>
 
   // Payments
   getPayments: (memberId?: number, opts?: { offset?: number; limit?: number }) => Promise<Payment[]>
@@ -105,7 +107,7 @@ export interface ElectronAPI {
   // Auth / Staff
   login: (username: string, password: string) => Promise<{ success: boolean; user?: StaffUser; message?: string }>
   getUsers: () => Promise<StaffUser[]>
-  createUser: (user: CreateStaffInput) => Promise<{ success: boolean; message?: string }>
+  createUser: (user: CreateStaffInput) => Promise<{ success: boolean; message?: string; id?: number }>
   updateUser: (id: number, user: UpdateStaffInput) => Promise<{ success: boolean; message?: string }>
   deleteUser: (id: number) => Promise<{ success: boolean; message?: string }>
 
@@ -462,6 +464,14 @@ export interface FingerprintTemplateInfo {
   member_id: number
   member_name: string
   status: string
+  fmdBase64: string
+}
+
+export interface StaffFingerprintTemplateInfo {
+  staff_id: number
+  username: string
+  display_name?: string | null
+  role: 'admin' | 'staff'
   fmdBase64: string
 }
 

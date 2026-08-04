@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './Login.css'
 import { StaffUser } from '../types/electron'
+import { FingerprintIcon, FingerprintScanRings } from './FingerprintArt'
 
 interface LoginProps {
   onLogin: (user: StaffUser) => void
@@ -12,8 +13,36 @@ function Login({ onLogin }: LoginProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // P2 6.9: automatic biometric sign-in (staff/admin fingerprint) — the reader
+  // listens continuously, so there is no button to click.
+  const [fpSigningIn, setFpSigningIn] = useState(false)
+  const [fpError, setFpError] = useState('')
   const [appName, setAppName] = useState('REPCHECK')
   const [appLogo, setAppLogo] = useState('')
+  // Refs for the self-scheduling fingerprint listener (mirrors the kiosk loop)
+  const fpMountedRef = useRef(true)
+  const fpScanningRef = useRef(false)
+  const fpLoggedInRef = useRef(false)
+  const fpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loadingRef = useRef(false)
+
+  // Keep the password-login flag in a ref so the fingerprint listener can pause
+  // while a manual login request is in flight (never races the scanner).
+  useEffect(() => {
+    loadingRef.current = loading
+  }, [loading])
+
+  // Clear any pending scan timer when the login page unmounts
+  useEffect(() => {
+    fpMountedRef.current = true
+    return () => {
+      fpMountedRef.current = false
+      if (fpTimerRef.current) {
+        clearTimeout(fpTimerRef.current)
+        fpTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const load = async () => {
@@ -60,6 +89,115 @@ function Login({ onLogin }: LoginProps) {
       handleLogin()
     }
   }
+
+  // Schedule the next fingerprint scan attempt (no-op after unmount)
+  const scheduleFpScan = (delay: number) => {
+    if (!fpMountedRef.current) return
+    fpTimerRef.current = setTimeout(() => {
+      runFpScan()
+    }, delay)
+  }
+
+  // Continuous fingerprint listener (U.are.U 4500): every outcome re-arms the
+  // next capture, so the login page is ALWAYS listening — a staff/admin just
+  // places an enrolled finger on the scanner to sign in.
+  const runFpScan = useCallback(async () => {
+    if (!fpMountedRef.current) return
+    // A capture is already in flight — it will re-arm itself when it finishes.
+    if (fpScanningRef.current) return
+    // While a password login is being processed, don't start a new capture.
+    if (loadingRef.current) {
+      scheduleFpScan(1200)
+      return
+    }
+    fpScanningRef.current = true
+    setFpSigningIn(true)
+    setError('')
+    setFpError('')
+    try {
+      const status = await window.electronAPI.getFingerprintStatus()
+      if (!status.available) {
+        const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
+        setFpError(detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).')
+        // Retry slowly so a scanner connected later is picked up
+        scheduleFpScan(5000)
+        return
+      }
+
+      const capture = await window.electronAPI.captureFingerprint(30000)
+      if (!capture.ok) {
+        // No finger placed yet — clear any transient message and keep listening
+        setFpError('')
+        scheduleFpScan(1200)
+        return
+      }
+
+      const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
+      if ('error' in fmdRes) {
+        setFpError(fmdRes.error)
+        scheduleFpScan(2500)
+        return
+      }
+
+      const staffTemplates = await window.electronAPI.getAllStaffFingerprintTemplates()
+      if (staffTemplates.length === 0) {
+        setFpError('No staff fingerprints enrolled yet. An admin can enroll them under Users → Edit User → Fingerprint Sign-in.')
+        scheduleFpScan(5000)
+        return
+      }
+
+      const identify = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, staffTemplates)
+      if ('error' in identify || identify.index < 0 || identify.index >= staffTemplates.length) {
+        setFpError('Fingerprint not recognized. Try again or sign in with your password.')
+        scheduleFpScan(2500)
+        return
+      }
+
+      const matched = staffTemplates[identify.index]
+      const users = await window.electronAPI.getUsers()
+      const user = users.find(u => u.id === matched.staff_id)
+      if (!user) {
+        setFpError('No account matches this fingerprint.')
+        scheduleFpScan(2500)
+        return
+      }
+      // Guard against a second success if the login page hasn't unmounted yet
+      if (fpLoggedInRef.current) return
+      fpLoggedInRef.current = true
+      // Audit trail: biometric logins bypass the main-process login handler,
+      // so record the authentication here (P2 6.9).
+      try {
+        await window.electronAPI.createActivityLog({
+          action: 'staff_fingerprint_auth',
+          entity_type: 'staff',
+          entity_id: user.id,
+          details: JSON.stringify({
+            staff_name: user.display_name || user.username,
+            role: user.role,
+            context: 'login',
+          }),
+          user: `${user.display_name || user.username} (${user.role === 'admin' ? 'Admin' : 'Staff'})`,
+        })
+      } catch {
+        // Logging must never block a successful sign-in
+      }
+      onLogin(user)
+    } catch (err: any) {
+      setFpError(err?.message || 'Fingerprint sign-in failed.')
+      scheduleFpScan(2500)
+    } finally {
+      fpScanningRef.current = false
+      setFpSigningIn(false)
+    }
+  }, [onLogin])
+
+  // Start the fingerprint listener as soon as the login page mounts
+  useEffect(() => {
+    const t = setTimeout(() => {
+      runFpScan()
+    }, 500)
+    return () => clearTimeout(t)
+  }, [runFpScan])
 
   return (
     <div className="login-overlay">
@@ -160,6 +298,26 @@ function Login({ onLogin }: LoginProps) {
               'Sign In'
             )}
           </button>
+
+          {/* P2 6.9: automatic staff/admin fingerprint sign-in — the reader is
+              always listening, so there is no button to click. Just place an
+              enrolled finger on the scanner. */}
+          <div className="login-fp-divider"><span>or</span></div>
+          <div className={`login-fp-card${fpSigningIn ? ' active' : ''}`}>
+            <div className="login-fp-icon-wrap">
+              <FingerprintIcon progress={1} className="login-fp-icon" />
+              {fpSigningIn && <FingerprintScanRings />}
+            </div>
+            <span className="login-fp-card-title">Waiting for fingerprint…</span>
+            <span className="login-fp-card-hint">
+              Place an enrolled staff/admin finger on the scanner to sign in
+            </span>
+          </div>
+          {fpError && (
+            <div className="login-fp-error">
+              <span>⚠️ {fpError}</span>
+            </div>
+          )}
         </div>
 
         <p className="login-footer">

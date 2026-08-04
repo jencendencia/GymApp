@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Member } from '../types/electron'
+import MemberAvatar from './MemberAvatar'
 
 interface GlobalSearchProps {
   onClose: () => void
@@ -79,11 +80,13 @@ export default function GlobalSearch({ onClose, onSelectMember }: GlobalSearchPr
                 onMouseEnter={() => setSelected(i)}
                 onClick={() => onSelectMember(member)}
               >
-                {member.photo ? (
-                  <img src={member.photo} alt="" className="global-search-item-photo" />
-                ) : (
-                  <div className="global-search-item-avatar">{member.name.charAt(0)}</div>
-                )}
+                {/* Honors the global "Show Member Photos" setting (P2 6.9) */}
+                <MemberAvatar
+                  name={member.name}
+                  photo={member.photo}
+                  imgClassName="global-search-item-photo"
+                  fallbackClassName="global-search-item-avatar"
+                />
                 <div style={{ minWidth: 0 }}>
                   <div className="global-search-item-name">{member.name}</div>
                   <div className="global-search-item-sub">

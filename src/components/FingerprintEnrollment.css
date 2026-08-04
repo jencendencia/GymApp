@@ -1,0 +1,260 @@
+/* ── Shared fingerprint enrollment (P2 6.9) ──
+   Windows Hello-style 3-tap flow: SVG fills 1/3 per tap, step dots light up,
+   a chime confirms each capture, then a success panel. Also styles the shared
+   fingerprint artwork (fp-fill-*) and scan rings used by the kiosk modals. */
+
+/* Progressive-fill fingerprint artwork */
+.fp-fill-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.fp-fill-empty {
+  color: var(--text-faint, rgba(128, 128, 128, 0.35));
+  transition: opacity 0.3s ease;
+}
+
+.fp-fill-active {
+  color: var(--accent, #c6ff3d);
+}
+
+/* Pulsing radar rings around a fingerprint icon while scanning */
+.fp-scan-rings {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fp-scan-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent, #c6ff3d);
+  border-radius: 50%;
+  animation: fp-radar-pulse 1.5s ease-out infinite;
+}
+
+.fp-scan-ring.r2 { animation-delay: 0.5s; }
+.fp-scan-ring.r3 { animation-delay: 1s; }
+
+@keyframes fp-radar-pulse {
+  0%   { transform: scale(0.72); opacity: 0.9; }
+  100% { transform: scale(1.28); opacity: 0; }
+}
+
+/* ── Enrollment card ── */
+.fp-enroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface-2, rgba(128, 128, 128, 0.06));
+  border: 1px solid var(--border, #2a2f3a);
+  text-align: center;
+}
+
+.fp-enroll-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.fp-enroll-icon-wrap {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fp-enroll-icon {
+  width: 64px;
+  height: 64px;
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Success tick on the icon after a capture */
+.fp-enroll-icon-wrap.captured .fp-enroll-icon {
+  transform: scale(1.18);
+}
+
+.fp-enroll-icon-wrap.scanning .fp-enroll-icon {
+  animation: fp-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes fp-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(0.9); }
+}
+
+/* 3-step indicator dots */
+.fp-step-dots {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fp-step-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--surface, #181c24);
+  border: 2px solid var(--border, #2a2f3a);
+  transition: all 0.25s ease;
+}
+
+.fp-step-dot.filled {
+  background: var(--accent, #c6ff3d);
+  border-color: var(--accent, #c6ff3d);
+  color: #101215;
+  box-shadow: 0 0 8px rgba(198, 255, 61, 0.45);
+  animation: fp-dot-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.fp-step-dot.active {
+  border-color: var(--accent, #c6ff3d);
+  color: var(--accent, #c6ff3d);
+  animation: fp-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes fp-dot-pop {
+  0%   { transform: scale(0.4); }
+  100% { transform: scale(1); }
+}
+
+@keyframes fp-dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.18); }
+}
+
+/* Progress bar */
+.fp-progress-track {
+  width: 100%;
+  max-width: 220px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface, #181c24);
+  border: 1px solid var(--border, #2a2f3a);
+  overflow: hidden;
+}
+
+.fp-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent, #c6ff3d), var(--accent-2, #9ede2f));
+  box-shadow: 0 0 10px rgba(198, 255, 61, 0.5);
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Status area */
+.fp-enroll-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 108px;
+  width: 100%;
+}
+
+.fp-status-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fp-status-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.fp-enroll-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.fp-enroll-error {
+  font-size: 11px;
+  color: var(--danger, #ff5c5c);
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+/* Success panel */
+.fp-enroll-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  animation: fp-success-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.fp-success-check {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(198, 255, 61, 0.18);
+  border: 2px solid var(--accent, #c6ff3d);
+  color: var(--accent, #c6ff3d);
+  font-size: 26px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 18px rgba(198, 255, 61, 0.35);
+}
+
+.fp-success-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent, #c6ff3d);
+}
+
+.fp-success-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+@keyframes fp-success-in {
+  0%   { transform: scale(0.6); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Compact variant */
+.fp-enroll-compact {
+  padding: 12px;
+  gap: 10px;
+}
+
+.fp-enroll-compact .fp-enroll-icon-wrap {
+  width: 68px;
+  height: 68px;
+}
+
+.fp-enroll-compact .fp-enroll-icon {
+  width: 52px;
+  height: 52px;
+}
+
+.fp-enroll-compact .fp-enroll-status {
+  min-height: 96px;
+}

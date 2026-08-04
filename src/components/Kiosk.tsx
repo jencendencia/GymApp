@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './Kiosk.css'
 import jsQR from 'jsqr'
-import { Member, TodayStats, Plan } from '../types/electron'
+import { Member, Plan, DailyReport, StaffFingerprintTemplateInfo } from '../types/electron'
 import { log } from '../lib/logger'
-import { todayLocalOf } from '../lib/dates'
+import { todayLocal, todayLocalOf } from '../lib/dates'
 import { formatMoney } from '../lib/format'
+import { FingerprintIcon, FingerprintScanRings } from './FingerprintArt'
+import KioskExecReport from './KioskExecReport'
 
 interface KioskProps {
   onRefresh: () => void
 }
 
-type KioskState = 'idle' | 'match-found' | 'no-match' | 'expired' | 'blocked'
+type KioskState = 'idle' | 'match-found' | 'no-match' | 'expired' | 'blocked' | 'staff-verified'
 
 const AUTO_SCAN_DELAY = 600 // ms delay before auto-scanning
 const AUTO_CLOSE_SECONDS = 6
@@ -63,6 +65,15 @@ function Kiosk({ onRefresh }: KioskProps) {
   // flickers between the idle and a full-screen 'Scanning...' view.
   const [scanActive, setScanActive] = useState(false)
   const [blockedMessage, setBlockedMessage] = useState('')
+  // P2 6.9: staff fingerprint at the kiosk — verified screen / executive report
+  const [staffVerifiedUser, setStaffVerifiedUser] = useState<{ name: string; role: string } | null>(null)
+  const [showExecReport, setShowExecReport] = useState(false)
+  const [execReport, setExecReport] = useState<DailyReport | null>(null)
+  const [execReportLoading, setExecReportLoading] = useState(false)
+  const [execReportError, setExecReportError] = useState<string | null>(null)
+  const [execAdminName, setExecAdminName] = useState('')
+  // Live fingerprint rescan inside the blocked modal
+  const [blockedRescanning, setBlockedRescanning] = useState(false)
   // Renewal modal state
   const [showRenewModal, setShowRenewModal] = useState(false)
   const [renewPlans, setRenewPlans] = useState<Plan[]>([])
@@ -111,6 +122,16 @@ function Kiosk({ onRefresh }: KioskProps) {
   // Guards scheduleNext + handleRealScan so a pending capture can never re-arm
   // the scanner on an unmounted component (that would loop IPC calls forever).
   const mountedRef = useRef(true)
+  // Latest matched member + exec-report-open flag so the async scan loop and the
+  // staff-override handler always see fresh values (never a stale closure).
+  const matchedMemberRef = useRef<Member | null>(null)
+  const execReportOpenRef = useRef(false)
+  const staffVerifiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Staff template cache: re-fetched at most once every 20s so the continuous
+  // scan loop doesn't double its IPC/DB churn (member templates are still
+  // fetched every cycle — pre-existing behavior).
+  const staffTemplatesRef = useRef<StaffFingerprintTemplateInfo[]>([])
+  const staffTemplatesFetchedAtRef = useRef(0)
 
   // Mark unmounted + clear any pending scan timer when the kiosk closes
   useEffect(() => {
@@ -121,8 +142,21 @@ function Kiosk({ onRefresh }: KioskProps) {
         clearTimeout(autoScanTimer.current)
         autoScanTimer.current = null
       }
+      if (staffVerifiedTimer.current) {
+        clearTimeout(staffVerifiedTimer.current)
+        staffVerifiedTimer.current = null
+      }
     }
   }, [])
+
+  // Keep refs in sync for the self-scheduling scan loop
+  useEffect(() => {
+    matchedMemberRef.current = matchedMember
+  }, [matchedMember])
+
+  useEffect(() => {
+    execReportOpenRef.current = showExecReport
+  }, [showExecReport])
 
   // Load kiosk logo + settings from the Settings page
   useEffect(() => {
@@ -261,7 +295,9 @@ function Kiosk({ onRefresh }: KioskProps) {
   }, [showMemberIdInput])
 
   // Auto-scan in any state (except when the manual search box or member-ID input
-  // is open, the scanner is disabled, or a check-in was blocked)
+  // is open, the scanner is disabled, or a check-in was blocked). Scanning ALSO
+  // continues while the executive report modal is up — members can still check in
+  // and staff can scan without having to close it.
   useEffect(() => {
     if (!kioskSettings.scannerEnabled || state === 'blocked') return
     if (showManualSearch || showMemberIdInput) return
@@ -274,7 +310,20 @@ function Kiosk({ onRefresh }: KioskProps) {
         autoScanTimer.current = null
       }
     }
-  }, [state, showManualSearch, showMemberIdInput, matchKey, kioskSettings.scannerEnabled])
+  }, [state, showManualSearch, showMemberIdInput, matchKey, kioskSettings.scannerEnabled, showExecReport])
+
+  // The CHECK-IN BLOCKED screen auto-starts a live fingerprint rescan (no click
+  // needed) and keeps listening while it stays up: the member can retry their own
+  // check-in and staff/admin can authorize the override — all without touching a
+  // button. Re-arms itself on every completed attempt until the screen clears.
+  useEffect(() => {
+    if (state !== 'blocked' || blockedRescanning) return
+    if (!kioskSettings.scannerEnabled) return
+    const t = setTimeout(() => {
+      handleBlockedRescan()
+    }, AUTO_SCAN_DELAY)
+    return () => clearTimeout(t)
+  }, [state, blockedRescanning, kioskSettings.scannerEnabled])
 
   // Countdown timer for match-found auto-close
   useEffect(() => {
@@ -301,6 +350,72 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
   }, [state === 'match-found', matchKey])
 
+  // A staff/admin fingerprint was matched at the kiosk:
+  //  - Blocked check-in context → staff authorizes the override immediately
+  //    (no need to leave the blocked modal).
+  //  - Admin otherwise → Daily Executive Report modal (never a member check-in).
+  //  - Staff otherwise → brief "Staff Verified" screen, kiosk keeps scanning.
+  // NOTE: a plain function (not useCallback) on purpose — it only reads refs and
+  // calls stable callbacks, so the async scan loop never sees stale state.
+  const performStaffAction = async (staff: StaffFingerprintTemplateInfo, context: 'blocked' | 'normal') => {
+    const staffName = staff.display_name || staff.username
+    if (context === 'blocked') {
+      const member = matchedMemberRef.current
+      if (!member) {
+        resetToIdle()
+        return
+      }
+      await window.electronAPI.createCheckin({
+        member_id: member.id,
+        method: 'manual',
+        match_confidence: 1.0,
+        status: 'override',
+      })
+      log.checkinOverride(member.id, member.name)
+      log.action({
+        action: 'staff_fingerprint_auth',
+        entity_type: 'staff',
+        entity_id: staff.staff_id,
+        details: JSON.stringify({ staff_name: staffName, role: staff.role, context: 'override', member_name: member.name }),
+      })
+      setBlockedMessage('')
+      setState('match-found')
+      playSuccessSound()
+      notifyCheckin(member)
+      onRefresh()
+      return
+    }
+    if (staff.role === 'admin') {
+      log.action({
+        action: 'staff_fingerprint_auth',
+        entity_type: 'staff',
+        entity_id: staff.staff_id,
+        details: JSON.stringify({ staff_name: staffName, role: staff.role, context: 'exec_report' }),
+      })
+      setExecAdminName(staffName)
+      setExecReport(null)
+      setExecReportError(null)
+      setShowExecReport(true)
+      loadExecReport()
+      return
+    }
+    log.action({
+      action: 'staff_fingerprint_auth',
+      entity_type: 'staff',
+      entity_id: staff.staff_id,
+      details: JSON.stringify({ staff_name: staffName, role: staff.role, context: 'verified' }),
+    })
+    // Only regular staff reach this branch (admins return earlier with the report).
+    // If the exec report modal is up, close it so the verified screen shows.
+    if (execReportOpenRef.current) setShowExecReport(false)
+    setStaffVerifiedUser({ name: staffName, role: 'Staff' })
+    setState('staff-verified')
+    if (staffVerifiedTimer.current) clearTimeout(staffVerifiedTimer.current)
+    staffVerifiedTimer.current = setTimeout(() => {
+      if (stateRef.current === 'staff-verified') resetToIdle()
+    }, 6000)
+  }
+
   // Real fingerprint check-in via the native U.are.U 4500 SDK — capture a finger
   // directly from the reader, build a probe template, and 1:N match it against
   // every enrolled member template. Unlimited members, no Windows Hello prompts.
@@ -310,6 +425,19 @@ function Kiosk({ onRefresh }: KioskProps) {
   // no-match, expired. That means the next member can place a finger while the
   // previous member's confirmation is still on screen (no 10s wait), and a
   // failed match re-scans automatically (no 'Try Again' click needed).
+  // Fetch (and cache) enrolled staff/admin fingerprint templates for 1:N matching.
+  const getStaffTemplates = async (): Promise<StaffFingerprintTemplateInfo[]> => {
+    if (staffTemplatesRef.current.length === 0 || Date.now() - staffTemplatesFetchedAtRef.current > 20000) {
+      try {
+        staffTemplatesRef.current = await window.electronAPI.getAllStaffFingerprintTemplates()
+      } catch {
+        staffTemplatesRef.current = []
+      }
+      staffTemplatesFetchedAtRef.current = Date.now()
+    }
+    return staffTemplatesRef.current
+  }
+
   const handleRealScan = useCallback(async () => {
     if (!mountedRef.current) return
     if (isScanning.current) return
@@ -328,11 +456,14 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
 
     try {
-      // Load every enrolled member template for 1:N matching. Stay on the
-      // current state during prep work — no UI flicker.
-      const templates = await window.electronAPI.getAllFingerprintTemplates()
+      // Load every enrolled member + staff template for 1:N matching (P2 6.9).
+      // Stay on the current state during prep work — no UI flicker.
+      const [templates, staffTemplates] = await Promise.all([
+        window.electronAPI.getAllFingerprintTemplates(),
+        getStaffTemplates(),
+      ])
 
-      if (templates.length === 0) {
+      if (templates.length === 0 && staffTemplates.length === 0) {
         // No registered fingerprints yet — retry occasionally instead of every
         // 600ms (constant IPC/DB churn can stall frames on the kiosk).
         scheduleNext(EMPTY_SCAN_RETRY)
@@ -362,9 +493,32 @@ function Kiosk({ onRefresh }: KioskProps) {
       }
       const identifyRes = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, templates)
       if ('error' in identifyRes || identifyRes.index < 0 || identifyRes.index >= templates.length) {
+        // Not a member — check whether this is a staff/admin fingerprint (P2 6.9)
+        if (staffTemplates.length > 0) {
+          const staffRes = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, staffTemplates)
+          if (!('error' in staffRes) && staffRes.index >= 0 && staffRes.index < staffTemplates.length) {
+            const staff = staffTemplates[staffRes.index]
+            if (staff.role === 'admin') {
+              // Executive intercept: an admin scan NEVER processes a member
+              // check-in — it opens (or refreshes) the Daily Executive Report
+              // modal. Scanning continues while it's open.
+              const reportWasOpen = execReportOpenRef.current
+              performStaffAction(staff, 'normal')
+              // Refreshing an already-open report changes no effect dep, so the
+              // auto-scan effect won't re-arm — keep the loop alive manually.
+              if (reportWasOpen) scheduleNext(AUTO_SCAN_DELAY)
+              return
+            }
+            // Regular staff: brief verified screen; the kiosk keeps scanning.
+            performStaffAction(staff, 'normal')
+            scheduleNext(RETRY_DELAY)
+            return
+          }
+        }
         // Finger scanned but not recognized in the system — show the no-match
-        // screen AND keep scanning (no 'Try Again' click needed).
-        if (currentState === 'idle' || currentState === 'no-match') {
+        // screen (skipped while the exec report modal is up) AND keep scanning
+        // (no 'Try Again' click needed).
+        if ((currentState === 'idle' || currentState === 'no-match') && !execReportOpenRef.current) {
           setState('no-match')
         }
         scheduleNext(RETRY_DELAY)
@@ -380,6 +534,9 @@ function Kiosk({ onRefresh }: KioskProps) {
       }
 
       setMatchedMember(member)
+      // A member scan while the exec report is open ends the report so the
+      // member gets the normal full-screen confirmation.
+      if (execReportOpenRef.current) setShowExecReport(false)
 
       if (member.status === 'expired') {
         setState('expired')
@@ -420,7 +577,109 @@ function Kiosk({ onRefresh }: KioskProps) {
       setScanActive(false)
       isScanning.current = false
     }
-  }, [onRefresh])
+  }, [onRefresh, performStaffAction])
+
+  // ── P2 6.9: staff/admin fingerprint handling at the kiosk ──
+  // Loads today's daily report for the Executive intercept modal.
+  const loadExecReport = useCallback(async () => {
+    setExecReportLoading(true)
+    try {
+      const data = await window.electronAPI.getDailyReport(todayLocal())
+      setExecReport(data)
+    } catch (error: any) {
+      setExecReportError(error?.message || 'Failed to load the daily report.')
+    } finally {
+      setExecReportLoading(false)
+    }
+  }, [])
+
+  // Live fingerprint rescan inside the blocked modal (P2 6.9): lets the member
+  // retry their own check-in, or lets staff/admin re-authenticate and authorize
+  // the blocked check-in — all without exiting the modal.
+  const handleBlockedRescan = async () => {
+    if (blockedRescanning) return
+    const member = matchedMemberRef.current
+    if (!member) {
+      resetToIdle()
+      return
+    }
+    setBlockedRescanning(true)
+    try {
+      const status = await window.electronAPI.getFingerprintStatus()
+      if (!status.available) {
+        const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
+        setBlockedMessage(detail || 'Fingerprint scanner is not available. Use manual search instead.')
+        return
+      }
+
+      const capture = await window.electronAPI.captureFingerprint(30000)
+      if (!capture.ok) {
+        // If the user left the blocked screen mid-capture, don't touch its state
+        if (stateRef.current !== 'blocked') return
+        setBlockedMessage(capture.reason === 'timeout'
+          ? 'No finger detected. Place a finger on the scanner and try again.'
+          : capture.message || 'Scan cancelled.')
+        return
+      }
+      if (stateRef.current !== 'blocked') return
+
+      const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
+      if ('error' in fmdRes) {
+        setBlockedMessage(fmdRes.error)
+        return
+      }
+      if (stateRef.current !== 'blocked') return
+
+      const [memberTemplates, staffTemplates] = await Promise.all([
+        window.electronAPI.getAllFingerprintTemplates(),
+        getStaffTemplates(),
+      ])
+      if (stateRef.current !== 'blocked') return
+
+      // 1) Staff/Admin scan → authorize the blocked member (override) right here
+      if (staffTemplates.length > 0) {
+        const staffRes = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, staffTemplates)
+        if (!('error' in staffRes) && staffRes.index >= 0 && staffRes.index < staffTemplates.length) {
+          await performStaffAction(staffTemplates[staffRes.index], 'blocked')
+          return
+        }
+      }
+
+      // 2) Member scan → retry their check-in
+      if (memberTemplates.length > 0) {
+        const memberRes = await window.electronAPI.identifyFingerprint(fmdRes.fmdBase64, memberTemplates)
+        if (!('error' in memberRes) && memberRes.index >= 0 && memberRes.index < memberTemplates.length) {
+          const tpl = memberTemplates[memberRes.index]
+          const member = await window.electronAPI.getMember(tpl.member_id)
+          if (member) {
+            setMatchedMember(member)
+            const result = await window.electronAPI.createCheckin({
+              member_id: member.id,
+              method: 'fingerprint',
+              match_confidence: 1.0,
+              status: 'success',
+            })
+            if (result && result.success === false) {
+              setBlockedMessage(result.message || 'Check-in is still blocked.')
+            } else {
+              setState('match-found')
+              playSuccessSound()
+              log.checkinFingerprint(member.id, member.name)
+              notifyCheckin(member)
+              onRefresh()
+            }
+            return
+          }
+        }
+      }
+
+      setBlockedMessage('Fingerprint not recognized. Try again or use manual search.')
+    } catch (error: any) {
+      setBlockedMessage(error?.message || 'Scan failed. Try again.')
+    } finally {
+      setBlockedRescanning(false)
+    }
+  }
 
   const handleManualSearch = async () => {
     if (!searchQuery.trim()) return
@@ -1270,14 +1529,42 @@ function Kiosk({ onRefresh }: KioskProps) {
     </div>
   )
 
-  const renderBlocked = () => (
-    <div className="kiosk-no-match">
+  const renderBlocked = () => matchedMember && (
+    <div className="kiosk-no-match kiosk-blocked">
       <div className="no-match-icon">⛔</div>
       <h2 className="display-text">Check-in Blocked</h2>
       <p className="text-muted">{blockedMessage}</p>
+
+      {/* Blocked member context */}
+      <div className="kiosk-blocked-member">
+        <div className="profile-avatar kiosk-blocked-avatar">
+          {matchedMember.photo && kioskSettings.showMemberPhotos ? (
+            <img src={matchedMember.photo} alt={matchedMember.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+          ) : (
+            matchedMember.name.charAt(0).toUpperCase()
+          )}
+        </div>
+        <div className="kiosk-blocked-member-info">
+          <span className="kiosk-blocked-member-name">{matchedMember.name}</span>
+          <span className="mono-text">ID: {matchedMember.member_id}</span>
+        </div>
+      </div>
+
+{/* Live fingerprint rescan — retry or staff authorize without leaving the modal (P2 6.9).
+          Scans automatically on entry (no button needed), so this is just a compact status card. */}
+      <div className={`kiosk-blocked-scan${blockedRescanning ? ' active' : ''}`}>
+        <div className="kiosk-blocked-fp-wrap">
+          <FingerprintIcon progress={1} className="kiosk-blocked-fp" />
+          {blockedRescanning && <FingerprintScanRings />}
+        </div>
+        <span className="kiosk-blocked-scan-title">
+          {blockedRescanning ? 'Waiting for fingerprint…' : 'Listening for fingerprint…'}
+        </span>
+      </div>
+
       <div className="no-match-actions">
-        <button className="btn btn-primary" onClick={resetToIdle}>
-          Try Again
+        <button className="btn btn-secondary" onClick={resetToIdle}>
+          Done
         </button>
         <button className="btn btn-secondary" onClick={() => {
           resetToIdle()
@@ -1285,6 +1572,21 @@ function Kiosk({ onRefresh }: KioskProps) {
         }}>
           Search Manually
         </button>
+      </div>
+    </div>
+  )
+
+  const renderStaffVerified = () => staffVerifiedUser && (
+    <div className="kiosk-no-match kiosk-staff-verified">
+      <div className="kiosk-staff-verified-icon">✓</div>
+      <h2 className="display-text">Staff Verified</h2>
+      <p className="kiosk-staff-verified-name">{staffVerifiedUser.name}</p>
+      <span className={`status-badge ${staffVerifiedUser.role === 'Admin' ? 'active' : 'inactive'}`}>
+        {staffVerifiedUser.role}
+      </span>
+      <div className="kiosk-scan-next">
+        <span className="kiosk-scan-dot" />
+        <span>Returning to check-in…</span>
       </div>
     </div>
   )
@@ -1386,9 +1688,24 @@ function Kiosk({ onRefresh }: KioskProps) {
         <div className={`kiosk-screen${state === 'expired' ? ' active' : ''}`}>{renderExpired()}</div>
         <div className={`kiosk-screen${state === 'no-match' ? ' active' : ''}`}>{renderNoMatch()}</div>
         <div className={`kiosk-screen${state === 'blocked' ? ' active' : ''}`}>{renderBlocked()}</div>
+        <div className={`kiosk-screen${state === 'staff-verified' ? ' active' : ''}`}>{renderStaffVerified()}</div>
       </div>
       {showRenewModal && renderRenewModal()}
       {showGuestModal && renderGuestModal()}
+
+      {/* ── P2 6.9: Daily Kiosk Executive Report (admin fingerprint intercept) ── */}
+      {showExecReport && (
+        <KioskExecReport
+          adminName={execAdminName}
+          report={execReport}
+          loading={execReportLoading}
+          error={execReportError}
+          onClose={() => {
+            setShowExecReport(false)
+            resetToIdle()
+          }}
+        />
+      )}
 
       {/* ── QR Scanner Modal ── */}
       {showQrScanner && (

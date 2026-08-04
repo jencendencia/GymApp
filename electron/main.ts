@@ -280,6 +280,16 @@ function logMain(level: 'info' | 'warn' | 'error', message: string, meta?: Recor
   }
 }
 
+// Format an activity-log actor from a staff row: "Display Name (Role)" with a
+// username fallback, so the audit trail records the real person's name and role
+// instead of a generic "staff" label (P2 6.9 / Activity Log identity fix).
+function logActorLabel(user: { display_name?: string | null; username?: string; role?: string } | null | undefined): string {
+  if (!user) return 'staff'
+  const name = user.display_name || user.username || 'staff'
+  const role = user.role === 'admin' ? 'Admin' : user.role === 'staff' ? 'Staff' : ''
+  return role ? `${name} (${role})` : name
+}
+
 // Returns remaining lockout ms (0 if not locked)
 function isLoginLocked(username: string): number {
   const key = username.toLowerCase()
@@ -362,6 +372,17 @@ function initDatabase() {
       quality REAL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    -- Staff/admin fingerprint templates (P2 6.9): enrolled in Users → used for
+    -- kiosk executive intercept (admin daily report) + fingerprint login.
+    CREATE TABLE IF NOT EXISTS staff_fingerprints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      staff_id INTEGER NOT NULL,
+      template BLOB NOT NULL,
+      quality REAL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (staff_id) REFERENCES staff(id)
     );
 
     CREATE TABLE IF NOT EXISTS checkins (
@@ -1226,7 +1247,8 @@ function buildBackupJson(): string {
     payments: db.prepare('SELECT * FROM payments').all() as any[],
     coaches: db.prepare('SELECT * FROM coaches').all() as any[],
     coach_fee_payments: db.prepare('SELECT * FROM coach_fee_payments').all() as any[],
-    staff: db.prepare('SELECT * FROM staff').all() as any[],
+staff: db.prepare('SELECT * FROM staff').all() as any[],
+    staff_fingerprints: db.prepare('SELECT * FROM staff_fingerprints').all() as any[],
     activity_logs: db.prepare('SELECT * FROM activity_logs').all() as any[],
     reminders: db.prepare('SELECT * FROM reminders').all() as any[],
     guest_checkins: db.prepare('SELECT * FROM guest_checkins').all() as any[],
@@ -1745,6 +1767,48 @@ function setupIPC() {
     return { success: true }
   })
 
+  // ── Staff / Admin fingerprint templates (P2 6.9) ──
+  // Same ANSI-378 FMD pipeline as member enrollment, but for staff accounts so
+  // admin/staff can sign in by fingerprint and trigger the kiosk executive view.
+  ipcMain.handle('replace-staff-fingerprints', (event, staffId: number, fingerprints: { fmdBase64?: string; quality?: number }[]) => {
+    if (!staffId || !Array.isArray(fingerprints)) return { success: false }
+    try {
+      const replace = db!.transaction(() => {
+        db!.prepare('DELETE FROM staff_fingerprints WHERE staff_id = ?').run(staffId)
+        const ins = db!.prepare('INSERT INTO staff_fingerprints (staff_id, template, quality) VALUES (?, ?, ?)')
+        for (const fp of fingerprints) {
+          if (!fp?.fmdBase64) continue
+          ins.run(staffId, Buffer.from(String(fp.fmdBase64), 'base64'), Number(fp.quality) || 0)
+        }
+      })
+      replace()
+    } catch (error: any) {
+      logMain('error', 'replace-staff-fingerprints failed', { staffId, error: error.message })
+      return { success: false }
+    }
+    broadcastDataChanged(event.sender)
+    return { success: true }
+  })
+
+  ipcMain.handle('get-all-staff-fingerprint-templates', () => {
+    const rows = (db?.prepare(`
+      SELECT sf.staff_id, sf.template, s.username, s.display_name, s.role
+      FROM staff_fingerprints sf
+      JOIN staff s ON s.id = sf.staff_id
+      ORDER BY s.username ASC
+    `).all() as any[]) || []
+    // Same ANSI-378 guard as member templates — skip malformed legacy blobs.
+    return rows
+      .filter((r) => isValidFmd(r.template))
+      .map((r) => ({
+        staff_id: r.staff_id,
+        username: r.username,
+        display_name: r.display_name,
+        role: r.role,
+        fmdBase64: Buffer.from(r.template).toString('base64'),
+      }))
+  })
+
   // Payments
   ipcMain.handle('get-payments', (_, memberId?: number, opts?: { offset?: number; limit?: number }) => {
     const offset = clampNumber(opts?.offset, 0, 100000, 0)
@@ -2099,8 +2163,9 @@ function setupIPC() {
         // Disable foreign key checks during restore
         db!.pragma('foreign_keys = OFF')
 
-        // Clear existing data (order matters due to foreign keys)
+// Clear existing data (order matters due to foreign keys)
         db!.exec('DELETE FROM fingerprint_templates')
+        db!.exec('DELETE FROM staff_fingerprints')
         db!.exec('DELETE FROM checkins')
         db!.exec('DELETE FROM payments')
         db!.exec('DELETE FROM coach_fee_payments')
@@ -2132,8 +2197,9 @@ function setupIPC() {
         if (deserialized.coach_fee_payments) insertRows('coach_fee_payments', deserialized.coach_fee_payments)
         if (deserialized.checkins) insertRows('checkins', deserialized.checkins)
         if (deserialized.fingerprint_templates) insertRows('fingerprint_templates', deserialized.fingerprint_templates)
-        if (deserialized.payments) insertRows('payments', deserialized.payments)
+if (deserialized.payments) insertRows('payments', deserialized.payments)
         if (deserialized.staff) insertRows('staff', deserialized.staff)
+        if (deserialized.staff_fingerprints) insertRows('staff_fingerprints', deserialized.staff_fingerprints)
         if (deserialized.activity_logs) insertRows('activity_logs', deserialized.activity_logs)
         if (deserialized.reminders) insertRows('reminders', deserialized.reminders)
         if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest_checkins)
@@ -2514,7 +2580,7 @@ function setupIPC() {
         recordFailedLogin(username)
         db?.prepare(
           'INSERT INTO activity_logs (action, entity_type, entity_id, details, user) VALUES (?, ?, ?, ?, ?)'
-        ).run('login_failed', 'staff', user?.id ?? null, JSON.stringify({ username }), username)
+        ).run('login_failed', 'staff', user?.id ?? null, JSON.stringify({ username }), user ? logActorLabel(user) : username)
         return { success: false, message: 'Invalid username or password' }
       }
 
@@ -2528,7 +2594,7 @@ function setupIPC() {
 
       db?.prepare(
         'INSERT INTO activity_logs (action, entity_type, entity_id, details, user) VALUES (?, ?, ?, ?, ?)'
-      ).run('login_success', 'staff', user.id, JSON.stringify({ username }), user.username)
+      ).run('login_success', 'staff', user.id, JSON.stringify({ username }), logActorLabel(user))
 
       return {
         success: true,
@@ -2557,9 +2623,9 @@ function setupIPC() {
         return { success: false, message: 'Username already exists' }
       }
       const hash = hashPassword(user.password)
-      db?.prepare('INSERT INTO staff (username, password_hash, role, photo, display_name) VALUES (?, ?, ?, ?, ?)')
+      const res = db?.prepare('INSERT INTO staff (username, password_hash, role, photo, display_name) VALUES (?, ?, ?, ?, ?)')
         .run(user.username, hash, user.role || 'staff', user.photo || null, user.display_name || null)
-      return { success: true }
+      return { success: true, id: Number(res?.lastInsertRowid) || 0 }
     } catch (error: any) {
       return { success: false, message: error.message }
     }

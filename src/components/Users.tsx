@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import './Users.css'
 import { StaffUser } from '../types/electron'
 import ConfirmModal from './ConfirmModal'
+import FingerprintEnrollment, { ENROLL_STEPS, FingerprintSlotData, emptyFingerSlots } from './FingerprintEnrollment'
+import { log } from '../lib/logger'
 
 function Users() {
   const [users, setUsers] = useState<StaffUser[]>([])
@@ -12,6 +14,8 @@ function Users() {
   const [form, setForm] = useState({ username: '', password: '', confirm_password: '', role: 'staff' as 'admin' | 'staff', display_name: '', photo: '' })
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
+  // P2 6.9: staff/admin fingerprint enrollment (up to 3 fingers) for biometric sign-in
+  const [userFp, setUserFp] = useState<FingerprintSlotData[]>(emptyFingerSlots())
 
   useEffect(() => { loadUsers() }, [])
 
@@ -31,6 +35,7 @@ function Users() {
     setEditingUser(null)
     setForm({ username: '', password: '', confirm_password: '', role: 'staff', display_name: '', photo: '' })
     setFormError('')
+    setUserFp(emptyFingerSlots())
     setShowModal(true)
   }
 
@@ -38,7 +43,54 @@ function Users() {
     setEditingUser(user)
     setForm({ username: user.username, password: '', confirm_password: '', role: user.role, display_name: user.display_name || '', photo: user.photo || '' })
     setFormError('')
+    setUserFp(emptyFingerSlots())
+    loadStaffFingerprints(user.id)
     setShowModal(true)
+  }
+
+  // Pre-fill the fingerprint slots with this user's enrolled templates (edit mode)
+  const loadStaffFingerprints = async (staffId: number) => {
+    try {
+      const all = await window.electronAPI.getAllStaffFingerprintTemplates()
+      const mine = all.filter(t => t.staff_id === staffId).slice(0, ENROLL_STEPS)
+      setUserFp(Array.from({ length: ENROLL_STEPS }, (_, i) => ({
+        fmdBase64: mine[i]?.fmdBase64 || null,
+        quality: 0,
+      })))
+    } catch {
+      // Leave slots empty — enrollment is optional
+    }
+  }
+
+  // Capture one finger from the U.are.U 4500 (same pipeline as member enrollment)
+  const captureFingerOnce = async (): Promise<FingerprintSlotData | null> => {
+    const status = await window.electronAPI.getFingerprintStatus()
+    if (!status.available) {
+      const detail = status.steps.filter(s => !s.ok).map(s => s.message).join(' ')
+      throw new Error(detail || 'Fingerprint scanner is not available. Check that the U.R.U. 4500 is plugged in and the SDK is installed (see Settings → Fingerprint Scanner).')
+    }
+    const capture = await window.electronAPI.captureFingerprint(30000)
+    if (!capture.ok) return null
+    const fmdRes = await window.electronAPI.createFingerprintFmd(capture.sample.imageBase64)
+    if ('error' in fmdRes) throw new Error(fmdRes.error)
+    return { fmdBase64: fmdRes.fmdBase64, quality: capture.sample.qualityCode || 0 }
+  }
+
+  // Persist the enrolled fingerprints (replaces the user's old set)
+  const saveStaffFingerprints = async (staffId: number) => {
+    const enrolled = userFp.filter(f => f.fmdBase64)
+    await window.electronAPI.replaceStaffFingerprints(
+      staffId,
+      enrolled.map(f => ({ fmdBase64: f.fmdBase64!, quality: f.quality || 0 }))
+    )
+    if (enrolled.length > 0) {
+      log.action({
+        action: 'register_staff_fingerprint',
+        entity_type: 'staff',
+        entity_id: staffId,
+        details: JSON.stringify({ staff_name: form.display_name || form.username, count: enrolled.length }),
+      })
+    }
   }
 
   const handlePhotoUpload = () => {
@@ -92,6 +144,8 @@ function Users() {
           setSaving(false)
           return
         }
+        // P2 6.9: save the staff fingerprint enrollments (replaces old set)
+        await saveStaffFingerprints(editingUser.id)
       } else {
         const result = await window.electronAPI.createUser({
           username: form.username,
@@ -105,6 +159,8 @@ function Users() {
           setSaving(false)
           return
         }
+        // P2 6.9: save fingerprints right after the account row exists
+        if (result.id) await saveStaffFingerprints(result.id)
       }
       setShowModal(false)
       await loadUsers()
@@ -231,6 +287,24 @@ function Users() {
                     <button className="user-photo-remove" onClick={handleRemovePhoto}>✕</button>
                   )}
                 </div>
+              </div>
+
+              {/* P2 6.9: fingerprint enrollment — biometric sign-in + kiosk executive access */}
+              <div className="user-fp-section">
+                <div className="user-fp-header">
+                  <span className="user-fp-title">🖐️ Fingerprint Sign-in</span>
+                  <span className="user-fp-hint">
+                    Enroll up to 3 fingers. This user can then log in by fingerprint, and admins
+                    scanning at the kiosk open the Daily Executive Report.
+                  </span>
+                </div>
+                <FingerprintEnrollment
+                  compact
+                  initialFingers={userFp}
+                  captureFinger={captureFingerOnce}
+                  onEnrolled={setUserFp}
+                  hint="Tap the finger 3 times to finish enrollment."
+                />
               </div>
 
               <div className="user-form-grid">
