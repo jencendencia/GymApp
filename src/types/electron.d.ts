@@ -158,6 +158,14 @@ export interface CreateCoachInput {
   professional_fee?: number
 }
 
+export interface WaiverTemplate {
+  id: number
+  title: string
+  content: string
+  updated_at?: string
+  is_default?: boolean
+}
+
 export interface Member {
   id: number
   member_id: string
@@ -181,6 +189,7 @@ export interface Member {
   status: 'active' | 'inactive' | 'expired'
   created_at: string
   waiver_agreed_at?: string
+  waiver_template_id?: number
   auto_renew?: number
   plan_name?: string
   coach_name?: string
@@ -207,6 +216,7 @@ export interface CreateMemberInput {
   coaching_end?: string
   balance?: number
   waiver_agreed_at?: string
+  waiver_template_id?: number
   auto_renew?: number
 }
 
@@ -229,6 +239,7 @@ export interface UpdateMemberInput {
   balance?: number
   status?: 'active' | 'inactive' | 'expired'
   waiver_agreed_at?: string
+  waiver_template_id?: number
   sessions_used?: number
   auto_renew?: number
 }

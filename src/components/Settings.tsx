@@ -5,6 +5,7 @@ import { log } from '../lib/logger'
 import ConfirmModal from './ConfirmModal'
 import { useSettings } from '../lib/settingsContext'
 import { notifyDataChanged } from '../lib/data'
+import { WaiverTemplate } from '../types/electron'
 
 interface SettingsState {
   appName: string
@@ -51,6 +52,13 @@ type BannerState =
   | { type: 'error'; message: string }
   | { type: 'loading'; message: string }
 
+const DEFAULT_WAIVER_TEMPLATE: WaiverTemplate = {
+  id: 1,
+  title: 'Membership Waiver & Release',
+  content: 'I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.\n\nI acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.\n\nI represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.\n\nI hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.\n\nI agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.\n\nI grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.\n\nBy clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.',
+  is_default: true,
+}
+
 function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUser?: StaffUser | null; onAppNameChange?: (name: string) => void; onAppLogoChange?: (logo: string) => void }) {
   const isAdmin = currentUser?.role === 'admin'
   // P2 6.9: broadcast settings changes (e.g. showMemberPhotos) to every component
@@ -91,6 +99,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
+  const [waiverTemplates, setWaiverTemplates] = useState<WaiverTemplate[]>([DEFAULT_WAIVER_TEMPLATE])
+  const [waiverForm, setWaiverForm] = useState<{ id: number | null; title: string; content: string }>({ id: null, title: '', content: '' })
 
   useEffect(() => {
     loadSettings()
@@ -137,6 +147,20 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.welcomeEmailEnabled) setSettings(prev => ({ ...prev, welcomeEmailEnabled: data.welcomeEmailEnabled === 'true' }))
       if (data.receiptEmailEnabled) setSettings(prev => ({ ...prev, receiptEmailEnabled: data.receiptEmailEnabled === 'true' }))
       if (data.theme) setSettings(prev => ({ ...prev, theme: data.theme === 'light' ? 'light' : 'dark' }))
+      if (data.waiverTemplates) {
+        try {
+          const parsed = JSON.parse(data.waiverTemplates) as WaiverTemplate[]
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const normalized = parsed.map((template, index) => ({
+              ...template,
+              is_default: Boolean(template.is_default) || (index === 0 && !parsed.some(t => t.is_default)),
+            }))
+            setWaiverTemplates(normalized)
+          }
+        } catch {
+          setWaiverTemplates([DEFAULT_WAIVER_TEMPLATE])
+        }
+      }
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
@@ -188,8 +212,10 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         welcomeEmailEnabled: settings.welcomeEmailEnabled.toString(),
         receiptEmailEnabled: settings.receiptEmailEnabled.toString(),
         theme: settings.theme,
+        waiverTemplates: JSON.stringify(waiverTemplates),
       })
       setSaved(true)
+      notifyDataChanged()
       // Broadcast the new settings (showMemberPhotos, etc.) to the whole app
       await refreshSettings()
       if (onAppNameChange) onAppNameChange(settings.appName)
@@ -379,6 +405,59 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
 
   const dismissBanner = () => setBackupBanner({ type: 'none' })
 
+  const resetWaiverForm = () => setWaiverForm({ id: null, title: '', content: '' })
+
+  const startEditWaiver = (template: WaiverTemplate) => {
+    setWaiverForm({ id: template.id, title: template.title, content: template.content })
+  }
+
+  const normalizeDefaultWaiver = (templates: WaiverTemplate[]) => {
+    const hasDefault = templates.some(template => template.is_default)
+    if (!hasDefault && templates.length > 0) {
+      return templates.map((template, index) => ({ ...template, is_default: index === 0 }))
+    }
+    return templates.map(template => ({ ...template, is_default: Boolean(template.is_default) }))
+  }
+
+  const handleWaiverTemplateSave = () => {
+    const title = waiverForm.title.trim()
+    const content = waiverForm.content.trim()
+    if (!title || !content) return
+
+    setWaiverTemplates(prev => {
+      const next = waiverForm.id
+        ? prev.map(t => t.id === waiverForm.id ? { ...t, title, content, updated_at: new Date().toISOString() } : t)
+        : [
+          ...prev,
+          {
+            id: Date.now(),
+            title,
+            content,
+            updated_at: new Date().toISOString(),
+            is_default: prev.length === 0,
+          },
+        ]
+      return normalizeDefaultWaiver(next)
+    })
+    resetWaiverForm()
+  }
+
+  const handleWaiverTemplateDelete = (id: number) => {
+    setWaiverTemplates(prev => {
+      const next = prev.filter(t => t.id !== id)
+      const normalized = normalizeDefaultWaiver(next)
+      return normalized
+    })
+    if (waiverForm.id === id) resetWaiverForm()
+  }
+
+  const handleSetDefaultWaiver = (id: number) => {
+    setWaiverTemplates(prev => normalizeDefaultWaiver(prev.map(template => ({
+      ...template,
+      is_default: template.id === id,
+    }))))
+  }
+
   return (
     <div className="settings-page">
       <div className="page-header">
@@ -495,6 +574,72 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                     style={{ display: 'none' }}
                   />
                 </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h2 className="section-title">Membership Waiver</h2>
+          <div className="settings-group">
+            <div className="setting-item" style={{ alignItems: 'flex-start', flexDirection: 'column', gap: 12 }}>
+              <div className="setting-info">
+                <span className="setting-label">Waiver Templates</span>
+                <span className="setting-description">Create, edit, and delete the waiver wording shown during member enrollment and renewal.</span>
+              </div>
+              <div className="waiver-template-list" style={{ width: '100%' }}>
+                {waiverTemplates.map((template) => (
+                  <div key={template.id} className="waiver-template-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '10px 0' }}>
+                    <div>
+                      <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>{template.title}</span>
+                        {template.is_default && (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            borderRadius: 999,
+                            padding: '2px 8px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: 0.4,
+                            color: 'var(--primary-contrast, #fff)',
+                            background: 'var(--primary, #4f46e5)',
+                          }}>
+                            Default
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{template.updated_at ? new Date(template.updated_at).toLocaleString() : 'No edit timestamp'}</div>
+                    </div>
+                    <div className="waiver-template-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {!template.is_default && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleSetDefaultWaiver(template.id)}>Set as Default</button>
+                      )}
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => startEditWaiver(template)}>Edit</button>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleWaiverTemplateDelete(template.id)} style={{ color: 'var(--danger)' }}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="waiver-template-editor" style={{ width: '100%', display: 'grid', gap: 10 }}>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Waiver title"
+                  value={waiverForm.title}
+                  onChange={(e) => setWaiverForm(prev => ({ ...prev, title: e.target.value }))}
+                />
+                <textarea
+                  className="input"
+                  rows={10}
+                  placeholder="Waiver content"
+                  value={waiverForm.content}
+                  onChange={(e) => setWaiverForm(prev => ({ ...prev, content: e.target.value }))}
+                />
+                <div className="waiver-template-editor-actions" style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={handleWaiverTemplateSave}>{waiverForm.id ? 'Save Changes' : 'Add Waiver'}</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={resetWaiverForm}>Clear</button>
+                </div>
               </div>
             </div>
           </div>

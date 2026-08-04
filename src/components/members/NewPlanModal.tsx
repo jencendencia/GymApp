@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Member, Plan } from '../../types/electron'
+import { Member, Plan, WaiverTemplate } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
 import { todayLocalOf, planEndDate } from '../../lib/dates'
 import WaiverModal from './WaiverModal'
@@ -27,6 +27,9 @@ interface NewPlanModalProps {
   autoRenew: boolean
   waiverAgreed: boolean
   waiverAgreedAt: string | null
+  waiverTemplates: WaiverTemplate[]
+  waiverTemplateId: number | null
+  onWaiverTemplateChange: (templateId: number | null) => void
   validationAttempted: boolean
   shakeKey: number
   missing: string[]
@@ -41,7 +44,7 @@ interface NewPlanModalProps {
 
 /** New Plan / renewal modal — plan select, waiver, and payment (P2 6.6). */
 function NewPlanModal(props: NewPlanModalProps) {
-  const { member, plans, data, payment, autoRenew, waiverAgreed, waiverAgreedAt, validationAttempted, shakeKey, missing } = props
+  const { member, plans, data, payment, autoRenew, waiverAgreed, waiverAgreedAt, waiverTemplates, waiverTemplateId, onWaiverTemplateChange, validationAttempted, shakeKey, missing } = props
   const planRef = useRef<HTMLSelectElement>(null)
   const paymentRef = useRef<HTMLInputElement>(null)
   const txnRef = useRef<HTMLInputElement>(null)
@@ -272,6 +275,8 @@ function NewPlanModal(props: NewPlanModalProps) {
       <WaiverModal
         open={showWaiver}
         showAgree
+        title={waiverTemplates.find(t => t.id === waiverTemplateId)?.title || waiverTemplates[0]?.title}
+        content={waiverTemplates.find(t => t.id === waiverTemplateId)?.content || waiverTemplates[0]?.content}
         onClose={() => setShowWaiver(false)}
         onAgree={() => {
           setShowWaiver(false)

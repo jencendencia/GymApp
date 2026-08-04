@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './Members.css'
 import QRCode from 'qrcode'
-import { Member, Plan, Coach, StaffUser, Payment } from '../types/electron'
+import { Member, Plan, Coach, StaffUser, Payment, WaiverTemplate } from '../types/electron'
 import { log } from '../lib/logger'
 import { useToast } from '../lib/toast'
 import { todayLocal, todayLocalOf } from '../lib/dates'
@@ -17,6 +17,12 @@ import { ENROLL_STEPS, FingerprintSlotData } from './FingerprintEnrollment'
 // Payment methods that require a transaction reference number
 const METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card']
 
+const DEFAULT_WAIVER_TEMPLATE: WaiverTemplate = {
+  id: 1,
+  title: 'Membership Waiver & Release',
+  content: 'I, the undersigned, acknowledge that I am voluntarily participating in the programs and activities offered by this fitness facility. I understand that there are inherent risks involved in physical exercise and the use of fitness equipment and facilities.\n\nI acknowledge that I have been informed of the potential risks associated with my participation, including but not limited to: muscle strains, sprains, fractures, cardiovascular complications, and other physical injuries. I voluntarily assume all risks associated with my participation.\n\nI represent that I am in good physical health and have no medical condition that would prevent safe participation in exercise programs. I understand that it is my responsibility to consult with a physician prior to beginning any exercise program.\n\nI hereby release, waive, and discharge this facility, its owners, employees, and agents from any and all liability, claims, demands, actions, or causes of action arising out of or causes of action arising out of or related to any loss, damage, or injury, including death, that may be sustained by me while participating in any activities at this facility.\n\nI agree to use all equipment and facilities in a safe and responsible manner. I understand that I must follow all posted rules and staff instructions. I will report any damaged or unsafe equipment to staff immediately.\n\nI grant permission to the facility to use photographs, video, or other media of me for promotional and marketing purposes, unless I notify the facility in writing of my objection.\n\nBy clicking "I Agree", I confirm that I have read, understood, and voluntarily agree to the terms and conditions of this waiver and release of liability.',
+}
+
 function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser?: StaffUser | null; initialSearch?: string; onSearchConsumed?: () => void }) {
   const isAdmin = currentUser?.role === 'admin'
   const { showToast } = useToast()
@@ -24,6 +30,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [members, setMembers] = useState<Member[]>([])
   // Full list used only for expiry computation (the table itself is paginated)
   const [allMembers, setAllMembers] = useState<Member[]>([])
+  const [waiverTemplates, setWaiverTemplates] = useState<WaiverTemplate[]>([])
+  const [selectedWaiverTemplateId, setSelectedWaiverTemplateId] = useState<number | null>(null)
   const [plans, setPlans] = useState<Plan[]>([])
   const [coaches, setCoaches] = useState<Coach[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -126,7 +134,12 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   useEffect(() => {
     loadPlans()
     loadCoaches()
+    loadWaiverTemplates()
   }, [])
+
+  useEffect(() => {
+    loadWaiverTemplates()
+  }, [dataVersion])
 
   // Load the last staff-entered member ID once so the new-member form can suggest the next ID
   useEffect(() => {
@@ -204,6 +217,31 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       setPlans(data)
     } catch (error) {
       console.error('Failed to load plans:', error)
+    }
+  }
+
+  const loadWaiverTemplates = async () => {
+    try {
+      const data = await window.electronAPI.getSettings()
+      if (data.waiverTemplates) {
+        const parsed = JSON.parse(data.waiverTemplates) as WaiverTemplate[]
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const normalized = parsed.map((template, index) => ({
+            ...template,
+            is_default: Boolean(template.is_default) || (index === 0 && !parsed.some(t => t.is_default)),
+          }))
+          const defaultTemplate = normalized.find(template => template.is_default) ?? normalized[0]
+          setWaiverTemplates(normalized)
+          setSelectedWaiverTemplateId(defaultTemplate?.id ?? null)
+          return
+        }
+      }
+      setWaiverTemplates([DEFAULT_WAIVER_TEMPLATE])
+      setSelectedWaiverTemplateId(DEFAULT_WAIVER_TEMPLATE.id)
+    } catch (error) {
+      console.error('Failed to load waiver templates:', error)
+      setWaiverTemplates([DEFAULT_WAIVER_TEMPLATE])
+      setSelectedWaiverTemplateId(DEFAULT_WAIVER_TEMPLATE.id)
     }
   }
 
@@ -401,6 +439,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coaching_end: formData.coaching_end || undefined,
         balance: formData.balance || 0,
         waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
+        waiver_template_id: waiverAgreed ? (selectedWaiverTemplateId ?? undefined) : undefined,
         auto_renew: formAutoRenew ? 1 : 0,
       })
 
@@ -509,6 +548,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         balance: formData.balance || 0,
         status: formData.status,
         waiver_agreed_at: waiverAgreedAt || undefined,
+        waiver_template_id: selectedWaiverTemplateId ?? undefined,
       })
 
       // Update fingerprint templates if any were captured (replaces the old set)
@@ -595,6 +635,11 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setFingerprint(emptyFingerprints())
     setWaiverAgreed(false)
     setWaiverAgreedAt(null)
+    // Default to the waiver marked as the default template (falls back to the
+    // first one when no template is flagged default).
+    setSelectedWaiverTemplateId(
+      waiverTemplates.find(t => t.is_default)?.id ?? waiverTemplates[0]?.id ?? null
+    )
     setValidationAttempted(false)
     setShakeKey(0)
     setPaymentForm({ amount: 0, type: 'new_plan', payment_method: 'cash', transaction_ref: '' })
@@ -627,6 +672,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     // Initialize waiver state based on existing member waiver
     setRenewWaiverAgreed(!!member.waiver_agreed_at)
     setRenewWaiverAgreedAt(member.waiver_agreed_at || null)
+    setSelectedWaiverTemplateId(member.waiver_template_id ?? waiverTemplates.find(t => t.is_default)?.id ?? waiverTemplates[0]?.id ?? null)
     setShowNewPlanModal(true)
   }
 
@@ -697,6 +743,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         waiver_agreed_at: (!newPlanMember.waiver_agreed_at && renewWaiverAgreed && renewWaiverAgreedAt)
           ? renewWaiverAgreedAt
           : undefined,
+        waiver_template_id: renewWaiverAgreed ? (selectedWaiverTemplateId ?? newPlanMember.waiver_template_id) : newPlanMember.waiver_template_id,
       })
 
       // Process payment if entered
@@ -759,6 +806,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setPhotoPreview(member.photo || null)
     setWaiverAgreed(!!member.waiver_agreed_at)
     setWaiverAgreedAt(member.waiver_agreed_at || null)
+    setSelectedWaiverTemplateId(member.waiver_template_id ?? null)
     setFormAutoRenew(!!member.auto_renew)
     setValidationAttempted(false)
     setShakeKey(0)
@@ -1073,6 +1121,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           payment={newPlanPayment}
           waiverAgreed={renewWaiverAgreed}
           waiverAgreedAt={renewWaiverAgreedAt}
+          waiverTemplates={waiverTemplates}
+          waiverTemplateId={selectedWaiverTemplateId}
+          onWaiverTemplateChange={setSelectedWaiverTemplateId}
           validationAttempted={newPlanValidationAttempted}
           shakeKey={newPlanShakeKey}
           missing={newPlanMissing}
@@ -1114,6 +1165,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           onFingerprintsChange={(fingers) => setFingerprint(prev => ({ ...prev, fingers, error: null }))}
           waiverAgreed={waiverAgreed}
           waiverAgreedAt={waiverAgreedAt}
+          waiverTemplates={waiverTemplates}
+          waiverTemplateId={selectedWaiverTemplateId}
+          onWaiverTemplateChange={setSelectedWaiverTemplateId}
           validationAttempted={validationAttempted}
           shakeKey={shakeKey}
           missingRequired={missingRequired}

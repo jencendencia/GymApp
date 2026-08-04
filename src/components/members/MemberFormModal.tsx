@@ -1,5 +1,5 @@
 import React, { RefObject } from 'react'
-import { Member, Plan, Coach, Payment } from '../../types/electron'
+import { Member, Plan, Coach, Payment, WaiverTemplate } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
 import { todayLocal, planEndDate } from '../../lib/dates'
 import WaiverModal from './WaiverModal'
@@ -81,6 +81,9 @@ interface MemberFormModalProps {
   onFingerprintsChange: (fingers: FingerprintSlotData[]) => void
   waiverAgreed: boolean
   waiverAgreedAt: string | null
+  waiverTemplates: WaiverTemplate[]
+  waiverTemplateId: number | null
+  onWaiverTemplateChange: (templateId: number | null) => void
   validationAttempted: boolean
   shakeKey: number
   missingRequired: string[]
@@ -117,7 +120,7 @@ function MemberFormModal(props: MemberFormModalProps) {
   const {
     selectedMember, plans, coaches, formData, onFormDataChange, paymentForm, onPaymentFormChange,
     photoPreview, initialFingers, captureFinger, onFingerprintsChange, waiverAgreed, waiverAgreedAt,
-    validationAttempted, shakeKey, missingRequired,
+    waiverTemplates, waiverTemplateId, onWaiverTemplateChange, validationAttempted, shakeKey, missingRequired,
     memberIdWarning, checkingMemberId, lastMemberId, lastMemberIdLoaded,
     memberPayments, paymentsLoading, isAdmin, autoRenew, onAutoRenewChange, refs, onMemberIdChange,
     onPhotoUpload, onCameraCapture, onPaymentStatus, onWaiverAgree, onSubmit, onClose,
@@ -660,6 +663,8 @@ function MemberFormModal(props: MemberFormModalProps) {
       <WaiverModal
         open={showWaiverModal}
         showAgree={!selectedMember}
+        title={waiverTemplates.find(t => t.id === waiverTemplateId)?.title || waiverTemplates[0]?.title}
+        content={waiverTemplates.find(t => t.id === waiverTemplateId)?.content || waiverTemplates[0]?.content}
         onClose={() => setShowWaiverModal(false)}
         onAgree={() => {
           setShowWaiverModal(false)

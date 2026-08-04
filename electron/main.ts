@@ -361,8 +361,16 @@ function initDatabase() {
       status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'expired')),
       archived INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      waiver_template_id INTEGER DEFAULT NULL,
       FOREIGN KEY (plan_id) REFERENCES plans(id),
       FOREIGN KEY (coach_id) REFERENCES coaches(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS waiver_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS fingerprint_templates (
@@ -475,6 +483,7 @@ function initDatabase() {
     { table: 'checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
     { table: 'guest_checkins', column: 'checked_out_at', def: 'DATETIME DEFAULT NULL' },
     { table: 'members', column: 'waiver_agreed_at', def: 'DATETIME DEFAULT NULL' },
+    { table: 'members', column: 'waiver_template_id', def: 'INTEGER DEFAULT NULL' },
     { table: 'staff', column: 'photo', def: 'TEXT DEFAULT NULL' },
     { table: 'staff', column: 'display_name', def: 'TEXT DEFAULT NULL' },
     { table: 'members', column: 'archived', def: 'INTEGER DEFAULT 0' },
@@ -1375,8 +1384,8 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, auto_renew)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, waiver_template_id, auto_renew)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -1396,6 +1405,7 @@ function setupIPC() {
       member.coaching_end || null,
       member.balance,
       member.waiver_agreed_at || null,
+      member.waiver_template_id ?? null,
       member.auto_renew ? 1 : 0
     )
     // P2 5.5: fire-and-forget welcome email on enrollment (setting-gated, SMTP optional)
@@ -1412,7 +1422,7 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), waiver_template_id = COALESCE(?, waiver_template_id), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
       WHERE id = ?
     `).run(
       member.name,
@@ -1433,6 +1443,7 @@ function setupIPC() {
       member.balance,
       member.status,
       member.waiver_agreed_at || null,
+      member.waiver_template_id ?? undefined,
       member.sessions_used ?? undefined,
       member.auto_renew === undefined ? undefined : (member.auto_renew ? 1 : 0),
       id
