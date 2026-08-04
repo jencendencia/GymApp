@@ -2015,11 +2015,14 @@ function setupIPC() {
     return settings
   })
 
-  ipcMain.handle('get-setting', (_, key: string) => {
+ipcMain.handle('get-setting', (_, key: string) => {
     const row = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
     if (!row?.value) return null
     return isSecretSetting(key) ? decryptSecret(row.value) : row.value
   })
+
+  // App version (used by the login screen footer so it always matches package.json)
+  ipcMain.handle('get-version', () => app.getVersion())
 
   ipcMain.handle('save-setting', (_, key: string, value: string) => {
     const stored = isSecretSetting(key) ? encryptSecret(value) : value
@@ -2373,6 +2376,20 @@ if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest
       console.error('get-monthly-report error:', error)
       throw error
     }
+  })
+
+// New members enrolled within a date range (used by the clickable
+  // "New Enrollments"/"New Members" stat cards on the Reports page).
+  ipcMain.handle('get-new-members', (_, range: { from: string; to: string }) => {
+    if (!range?.from || !range?.to) return []
+    return db?.prepare(`
+      SELECT m.*, p.name as plan_name, c.name as coach_name, p.type as plan_type, p.sessions as plan_sessions
+      FROM members m
+      LEFT JOIN plans p ON m.plan_id = p.id
+      LEFT JOIN coaches c ON m.coach_id = c.id
+      WHERE m.archived = 0 AND DATE(m.created_at, 'localtime') >= ? AND DATE(m.created_at, 'localtime') <= ?
+      ORDER BY m.created_at DESC
+    `).all(range.from, range.to) || []
   })
 
   // Activity Logs

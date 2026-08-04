@@ -17,8 +17,9 @@ function Login({ onLogin }: LoginProps) {
   // listens continuously, so there is no button to click.
   const [fpSigningIn, setFpSigningIn] = useState(false)
   const [fpError, setFpError] = useState('')
-  const [appName, setAppName] = useState('REPCHECK')
+const [appName, setAppName] = useState('REPCHECK')
   const [appLogo, setAppLogo] = useState('')
+  const [appVersion, setAppVersion] = useState('')
   // Refs for the self-scheduling fingerprint listener (mirrors the kiosk loop)
   const fpMountedRef = useRef(true)
   const fpScanningRef = useRef(false)
@@ -50,9 +51,13 @@ function Login({ onLogin }: LoginProps) {
         const name = await window.electronAPI.getSetting('appName')
         if (name) setAppName(name)
       } catch {}
-      try {
+try {
         const logo = await window.electronAPI.getSetting('appLogo')
         if (logo) setAppLogo(logo)
+      } catch {}
+      try {
+        const version = await window.electronAPI.getVersion()
+        if (version) setAppVersion(version)
       } catch {}
     }
     load()
@@ -320,8 +325,8 @@ function Login({ onLogin }: LoginProps) {
           )}
         </div>
 
-        <p className="login-footer">
-          REPCHECK v1.4.0
+<p className="login-footer">
+          {appName} v{appVersion || '1.4.0'}
         </p>
       </div>
     </div>

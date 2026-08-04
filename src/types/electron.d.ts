@@ -75,9 +75,10 @@ export interface ElectronAPI {
   getCoachMonthlyTotal: (coachId: number, date: string) => Promise<number>
   getCoachMonthlyPayments: (coachId: number, date: string) => Promise<CoachFeePayment[]>
 
-  // Reports
+// Reports
   getDailyReport: (date: string) => Promise<DailyReport>
   getMonthlyReport: (yearMonth: string) => Promise<MonthlyReport>
+  getNewMembers: (range: { from: string; to: string }) => Promise<Member[]>
   getAtRiskMembers: () => Promise<AtRiskMember[]>
   sendRenewalReminders: () => Promise<{
     success: boolean
@@ -110,6 +111,9 @@ export interface ElectronAPI {
   createUser: (user: CreateStaffInput) => Promise<{ success: boolean; message?: string; id?: number }>
   updateUser: (id: number, user: UpdateStaffInput) => Promise<{ success: boolean; message?: string }>
   deleteUser: (id: number) => Promise<{ success: boolean; message?: string }>
+
+// App info
+  getVersion: () => Promise<string>
 
   // Settings
   getSettings: () => Promise<Record<string, string>>

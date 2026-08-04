@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './Reports.css'
-import { DailyReport, MonthlyReport } from '../types/electron'
+import { DailyReport, MonthlyReport, Member } from '../types/electron'
 import { todayLocal, todayLocalOf } from '../lib/dates'
 import { getCurrencySymbol } from '../lib/format'
 
@@ -40,7 +40,13 @@ function Reports({ appName = 'REPCHECK' }: ReportsProps) {
   const [emailRecipient, setEmailRecipient] = useState('')
   const [emailSending, setEmailSending] = useState(false)
   const [emailResult, setEmailResult] = useState<EmailResult | null>(null)
-  const [reminderState, setReminderState] = useState<{ sending: boolean; result: string | null; error: string | null }>({ sending: false, result: null, error: null })
+const [reminderState, setReminderState] = useState<{ sending: boolean; result: string | null; error: string | null }>({ sending: false, result: null, error: null })
+
+  // New members modal (clickable "New Enrollments"/"New Members" stat cards)
+  const [newMembersOpen, setNewMembersOpen] = useState(false)
+  const [newMembersList, setNewMembersList] = useState<Member[]>([])
+  const [newMembersLoading, setNewMembersLoading] = useState(false)
+  const [newMembersRange, setNewMembersRange] = useState<{ from: string; to: string; label: string } | null>(null)
 
   // ── Load data ──
   const loadDaily = useCallback(async (date: string) => {
@@ -848,6 +854,28 @@ ${buildTable(
 
 
 
+// ── Open the "New Members" modal (clickable stat card) ──
+  const openNewMembersModal = async (range: { from: string; to: string; label: string }) => {
+    setNewMembersRange(range)
+    setNewMembersOpen(true)
+    setNewMembersList([])
+    setNewMembersLoading(true)
+    try {
+      const members = await window.electronAPI.getNewMembers({ from: range.from, to: range.to })
+      setNewMembersList(members)
+    } catch (error: any) {
+      console.error('Failed to load new members:', error)
+    } finally {
+      setNewMembersLoading(false)
+    }
+  }
+
+  const closeNewMembersModal = () => {
+    setNewMembersOpen(false)
+    setNewMembersList([])
+    setNewMembersRange(null)
+  }
+
   // ── Printable receipt (opens a print window) ──
   const handlePrintReceipt = (t: { id: number; member_name?: string; member_code?: string; plan_name?: string; type: string; payment_method?: string; amount: number; created_at: string }) => {
     const escReceipt = (s: string | undefined | null) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -1026,7 +1054,11 @@ ${buildTable(
                   <span className="stat-label">Total Revenue</span>
                   <span className="stat-sub">Today's collections</span>
                 </div>
-                <div className="stat-card info">
+<div
+                  className="stat-card info stat-card-clickable"
+                  title="View members enrolled today"
+                  onClick={() => openNewMembersModal({ from: dailyDate, to: dailyDate, label: fmtDateLabel(dailyDate) })}
+                >
                   <span className="stat-number display-text">{dailyReport.newMembers}</span>
                   <span className="stat-label">New Enrollments</span>
                   <span className="stat-sub">Members joined today</span>
@@ -1053,7 +1085,17 @@ ${buildTable(
                     {monthlyReport.percentChange >= 0 ? '▲' : '▼'} {fmtPct(monthlyReport.percentChange)} vs last month
                   </span>
                 </div>
-                <div className="stat-card info">
+<div
+                  className="stat-card info stat-card-clickable"
+                  title="View members enrolled this month"
+                  onClick={() => {
+                    const [y, m] = monthYear.split('-').map(Number)
+                    const lastDay = new Date(y, m, 0).getDate()
+                    const from = `${monthYear}-01`
+                    const to = `${monthYear}-${String(lastDay).padStart(2, '0')}`
+                    openNewMembersModal({ from, to, label: fmtMonthLabel(monthYear) })
+                  }}
+                >
                   <span className="stat-number display-text">{monthlyReport.newMembers}</span>
                   <span className="stat-label">New Members</span>
                   <span className="stat-sub">Joined this month</span>
@@ -1448,7 +1490,65 @@ ${monthly.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c
                 }}
                 disabled={!emailRecipient.trim() || emailSending}
               >
-                {emailSending ? 'Sending...' : 'Send Report'}
+{emailSending ? 'Sending...' : 'Send Report'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── New Members Modal (clickable "New Enrollments"/"New Members" stat cards) ── */}
+      {newMembersOpen && (
+        <div className="modal-overlay" onClick={closeNewMembersModal}>
+          <div className="modal reports-newmembers-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">👥 New Members</h2>
+              <button className="btn-icon" onClick={closeNewMembersModal}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p className="reports-newmembers-range">
+                {newMembersRange?.label}
+              </p>
+              {newMembersLoading ? (
+                <div className="reports-loading">
+                  <div className="loading-spinner" />
+                  <p>Loading members...</p>
+                </div>
+              ) : newMembersList.length === 0 ? (
+                <p className="empty-breakdown">No new members enrolled in this period.</p>
+              ) : (
+                <div className="reports-newmembers-list">
+                  {newMembersList.map(m => (
+                    <div key={m.id} className="reports-newmember-item">
+                      <div className="reports-newmember-avatar">
+                        {m.photo ? (
+                          <img src={m.photo} alt={m.name} />
+                        ) : (
+                          m.name.charAt(0).toUpperCase()
+                        )}
+                      </div>
+                      <div className="reports-newmember-info">
+                        <span className="reports-newmember-name">{m.name}</span>
+                        <span className="mono-text reports-newmember-code">{m.member_id}</span>
+                      </div>
+                      <div className="reports-newmember-plan">
+                        <span className="reports-newmember-plan-label">Plan</span>
+                        <span className="reports-newmember-plan-value">{m.plan_name || 'No plan'}</span>
+                      </div>
+                      <div className="reports-newmember-date">
+                        <span className="reports-newmember-plan-label">Joined</span>
+                        <span className="mono-text reports-newmember-date-value">
+                          {m.created_at ? new Date(m.created_at).toLocaleDateString() : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={closeNewMembersModal}>
+                Close
               </button>
             </div>
           </div>

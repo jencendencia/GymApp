@@ -62,9 +62,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updatePaymentStatus: (id: number, status: string, note?: string) =>
     ipcRenderer.invoke('update-payment-status', id, status, note),
 
-  // Reports
+// Reports
   getDailyReport: (date: string) => ipcRenderer.invoke('get-daily-report', date),
   getMonthlyReport: (yearMonth: string) => ipcRenderer.invoke('get-monthly-report', yearMonth),
+  getNewMembers: (range: { from: string; to: string }) => ipcRenderer.invoke('get-new-members', range),
   getAtRiskMembers: () => ipcRenderer.invoke('get-at-risk-members'),
   sendRenewalReminders: () => ipcRenderer.invoke('send-renewal-reminders'),
   sendReportEmail: (data: { html: string; recipient: string; appName: string; filename: string }) =>
@@ -117,6 +118,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createUser: (user: any) => ipcRenderer.invoke('create-user', user),
   updateUser: (id: number, user: any) => ipcRenderer.invoke('update-user', id, user),
   deleteUser: (id: number) => ipcRenderer.invoke('delete-user', id),
+
+// App info
+  getVersion: () => ipcRenderer.invoke('get-version'),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
