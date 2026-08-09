@@ -92,7 +92,9 @@ export interface ElectronAPI {
     message?: string
     sent: number
     skipped: number
-    results: { member_id: number; name: string; sent: boolean; message: string }[]
+    smsSent: number
+    smsSkipped: number
+    results: { member_id: number; name: string; channel: string; sent: boolean; message: string }[]
   }>
   sendReportEmail: (data: { html: string; recipient: string; appName: string; filename: string }) =>
     Promise<{ success: boolean; filePath?: string; message?: string }>
@@ -129,6 +131,14 @@ export interface ElectronAPI {
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
 
+  // Cloud SMS (PhilSMS)
+  verifySms: () => Promise<SmsStatus>
+  getSmsStatus: () => Promise<SmsStatus>
+  sendTestSms: (recipient: string) => Promise<{ success: boolean; message: string; id?: number }>
+  getSmsLogs: (limit?: number) => Promise<SmsLog[]>
+  retrySms: (id: number) => Promise<{ success: boolean }>
+  onSmsStatus: (callback: (status: SmsStatus) => void) => () => void
+
   // Theme
   getTheme: () => Promise<string | null>
   saveTheme: (theme: string) => Promise<void>
@@ -164,6 +174,27 @@ export interface CreateCoachInput {
   phone?: string
   specialty?: string
   professional_fee?: number
+}
+
+export interface SmsLog {
+  id: number
+  recipient: string
+  sender_id: string
+  message: string
+  type: 'plain' | 'unicode'
+  status: 'PENDING' | 'SENT' | 'FAILED'
+  attempts: number
+  last_error: string | null
+  created_at: string
+  sent_at: string | null
+}
+
+export interface SmsStatus {
+  verified: boolean
+  kind: 'off' | 'simulator' | 'not_configured' | 'ok' | 'no_credits' | 'rejected' | 'timeout' | 'error' | 'unknown'
+  balance: number | null
+  message: string
+  checkedAt: number
 }
 
 export interface WaiverTemplate {

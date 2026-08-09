@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import './Settings.css'
-import { StaffUser, FingerprintStatus } from '../types/electron'
+import { StaffUser, FingerprintStatus, SmsStatus, SmsLog } from '../types/electron'
 import { log } from '../lib/logger'
 import ConfirmModal from './ConfirmModal'
 import { useSettings } from '../lib/settingsContext'
@@ -34,6 +34,13 @@ interface SettingsState {
   welcomeEmailEnabled: boolean
   receiptEmailEnabled: boolean
   theme: 'dark' | 'light'
+  // Cloud SMS (PhilSMS)
+  smsChannel: string
+  cloudProvider: string
+  cloudApiKey: string
+  cloudSender: string
+  smsTemplate: string
+  renewalSmsTemplate: string
 }
 
 type UpdateStatusState =
@@ -51,6 +58,13 @@ type BannerState =
   | { type: 'success'; message: string }
   | { type: 'error'; message: string }
   | { type: 'loading'; message: string }
+
+// Default SMS message template (PHILSMS_SETUP_GUIDE.md placeholders).
+// {{flag}} renders LATE/EARLY on flagged scans; empty when not applicable.
+const DEFAULT_SMS_TEMPLATE = 'Welcome to {{gym}}, {{name}}! You checked {{action}} at {{time}}. Enjoy your workout!'
+// Default renewal-reminder SMS (sent from Reports → Send Reminders to members
+// expiring within 3 days). Keep ASCII — Unicode messages cost 2 credits.
+const DEFAULT_SMS_RENEWAL_TEMPLATE = 'Hi {{name}}, your {{plan}} membership at {{gym}} expires on {{date}} ({{days}} days left). Renew to keep your workouts going!'
 
 const DEFAULT_WAIVER_TEMPLATE: WaiverTemplate = {
   id: 1,
@@ -90,6 +104,12 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     welcomeEmailEnabled: false,
     receiptEmailEnabled: false,
     theme: 'dark',
+    smsChannel: 'off',
+    cloudProvider: 'philsms',
+    cloudApiKey: '',
+    cloudSender: '',
+    smsTemplate: DEFAULT_SMS_TEMPLATE,
+    renewalSmsTemplate: DEFAULT_SMS_RENEWAL_TEMPLATE,
   })
   const [saved, setSaved] = useState(false)
   const [scannerChecking, setScannerChecking] = useState(false)
@@ -102,6 +122,33 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
   const [waiverTemplates, setWaiverTemplates] = useState<WaiverTemplate[]>([DEFAULT_WAIVER_TEMPLATE])
   const [waiverForm, setWaiverForm] = useState<{ id: number | null; title: string; content: string }>({ id: null, title: '', content: '' })
+  // Cloud SMS (PhilSMS) state
+  const [smsStatus, setSmsStatus] = useState<SmsStatus | null>(null)
+  const [smsBanner, setSmsBanner] = useState<BannerState>({ type: 'none' })
+  const [smsTestPhone, setSmsTestPhone] = useState('')
+  const [smsLogs, setSmsLogs] = useState<SmsLog[]>([])
+
+  const loadSmsLogs = async () => {
+    try {
+      const rows = await window.electronAPI.getSmsLogs(10)
+      setSmsLogs(rows)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Live PhilSMS gateway status (broadcast from the main process on boot +
+  // every 60s, and after every Verify Connection click). Reload the outbox too,
+  // since the queue worker broadcasts after each delivery tick.
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onSmsStatus((status) => {
+      setSmsStatus(status)
+      loadSmsLogs()
+    })
+    window.electronAPI.getSmsStatus().then(setSmsStatus).catch(() => {})
+    loadSmsLogs()
+    return unsubscribe
+  }, [])
 
   useEffect(() => {
     loadSettings()
@@ -164,6 +211,13 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.welcomeEmailEnabled) setSettings(prev => ({ ...prev, welcomeEmailEnabled: data.welcomeEmailEnabled === 'true' }))
       if (data.receiptEmailEnabled) setSettings(prev => ({ ...prev, receiptEmailEnabled: data.receiptEmailEnabled === 'true' }))
       if (data.theme) setSettings(prev => ({ ...prev, theme: data.theme === 'light' ? 'light' : 'dark' }))
+      // Cloud SMS (PhilSMS)
+      if (data.smsChannel) setSettings(prev => ({ ...prev, smsChannel: data.smsChannel }))
+      if (data.cloudProvider) setSettings(prev => ({ ...prev, cloudProvider: data.cloudProvider }))
+      if (data.cloudApiKey) setSettings(prev => ({ ...prev, cloudApiKey: data.cloudApiKey }))
+      if (data.cloudSender) setSettings(prev => ({ ...prev, cloudSender: data.cloudSender }))
+      if (data.smsTemplate) setSettings(prev => ({ ...prev, smsTemplate: data.smsTemplate }))
+      if (data.renewalSmsTemplate) setSettings(prev => ({ ...prev, renewalSmsTemplate: data.renewalSmsTemplate }))
       if (data.waiverTemplates) {
         try {
           const parsed = JSON.parse(data.waiverTemplates) as WaiverTemplate[]
@@ -230,6 +284,12 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         receiptEmailEnabled: settings.receiptEmailEnabled.toString(),
         theme: settings.theme,
         waiverTemplates: JSON.stringify(waiverTemplates),
+        smsChannel: settings.smsChannel,
+        cloudProvider: settings.cloudProvider,
+        cloudApiKey: settings.cloudApiKey,
+        cloudSender: settings.cloudSender,
+        smsTemplate: settings.smsTemplate || DEFAULT_SMS_TEMPLATE,
+        renewalSmsTemplate: settings.renewalSmsTemplate || DEFAULT_SMS_RENEWAL_TEMPLATE,
       })
       setSaved(true)
       // If a valid password was just saved, clear the undecryptable warning
@@ -423,6 +483,47 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   }
 
   const dismissBanner = () => setBackupBanner({ type: 'none' })
+
+  // ── Cloud SMS (PhilSMS) handlers ──
+  const handleVerifySms = async () => {
+    setSmsBanner({ type: 'loading', message: 'Verifying PhilSMS connection...' })
+    try {
+      const status = await window.electronAPI.verifySms()
+      setSmsStatus(status)
+      setSmsBanner(status.verified
+        ? { type: 'success', message: status.message }
+        : { type: 'error', message: status.message })
+    } catch (error: any) {
+      setSmsBanner({ type: 'error', message: error.message })
+    }
+    setTimeout(() => setSmsBanner(b => b.type !== 'loading' ? { type: 'none' } : b), 8000)
+  }
+
+  const handleSendTestSms = async () => {
+    if (!smsTestPhone.trim()) return
+    setSmsBanner({ type: 'loading', message: 'Sending test SMS...' })
+    try {
+      const result = await window.electronAPI.sendTestSms(smsTestPhone.trim())
+      setSmsBanner(result.success
+        ? { type: 'success', message: result.message }
+        : { type: 'error', message: result.message })
+      loadSmsLogs()
+    } catch (error: any) {
+      setSmsBanner({ type: 'error', message: error.message })
+    }
+    setTimeout(() => setSmsBanner(b => b.type !== 'loading' ? { type: 'none' } : b), 8000)
+  }
+
+  const handleRetrySms = async (id: number) => {
+    try {
+      await window.electronAPI.retrySms(id)
+      setSmsBanner({ type: 'success', message: 'Message re-queued for delivery.' })
+      loadSmsLogs()
+    } catch (error: any) {
+      setSmsBanner({ type: 'error', message: error.message })
+    }
+    setTimeout(() => setSmsBanner(b => b.type !== 'loading' ? { type: 'none' } : b), 4000)
+  }
 
   const resetWaiverForm = () => setWaiverForm({ id: null, title: '', content: '' })
 
@@ -1089,6 +1190,202 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               </span>
               {smtpTestResult.type !== 'loading' && (
                 <button className="banner-dismiss" onClick={() => setSmtpTestResult({ type: 'none' })}>✕</button>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="settings-section">
+          <h2 className="section-title">SMS (Text Alerts)</h2>
+          <div className="settings-group">
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Delivery Channel</span>
+                <span className="setting-description">
+                  How member text alerts are delivered. <strong>Cloud SMS API</strong> needs internet + PhilSMS credits;
+                  <strong> Simulator</strong> logs messages as sent without using credits (great for testing).
+                </span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.smsChannel}
+                onChange={(e) => setSettings({ ...settings, smsChannel: e.target.value })}
+              >
+                <option value="off">Off</option>
+                <option value="simulator">Simulator (test only)</option>
+                <option value="cloud">Cloud SMS API (internet required)</option>
+              </select>
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Cloud Provider</span>
+                <span className="setting-description">SMS gateway used when the delivery channel is Cloud SMS API</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.cloudProvider}
+                onChange={(e) => setSettings({ ...settings, cloudProvider: e.target.value })}
+                disabled={settings.smsChannel !== 'cloud'}
+              >
+                <option value="philsms">PhilSMS (Philippines)</option>
+              </select>
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">API Key</span>
+                <span className="setting-description">
+                  Your PhilSMS API token from the dashboard (dashboard.philsms.com → API settings).
+                  🔒 Stored encrypted (Windows security)
+                </span>
+              </div>
+              <input
+                type="password"
+                className="input setting-input"
+                value={settings.cloudApiKey}
+                onChange={(e) => setSettings({ ...settings, cloudApiKey: e.target.value })}
+                placeholder="Paste your PhilSMS API token"
+                style={{ maxWidth: 340 }}
+              />
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Sender Name / ID</span>
+                <span className="setting-description">
+                  Required by PhilSMS — up to 11 characters (letters &amp; numbers). Falls back to the gym name if empty.
+                </span>
+              </div>
+              <input
+                type="text"
+                className="input setting-input"
+                value={settings.cloudSender}
+                onChange={(e) => setSettings({ ...settings, cloudSender: e.target.value.toUpperCase() })}
+                placeholder="e.g. REPCHECK"
+                maxLength={11}
+                style={{ width: 180 }}
+              />
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20, flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+              <div className="setting-info">
+                <span className="setting-label">SMS Message Template</span>
+                <span className="setting-description">
+                  Sent to members on check-in. Placeholders: {'{{gym}}'} {'{{name}}'} {'{{section}}'} {'{{action}}'} {'{{time}}'} {'{{flag}}'}
+                </span>
+              </div>
+              <textarea
+                className="input"
+                rows={3}
+                value={settings.smsTemplate}
+                onChange={(e) => setSettings({ ...settings, smsTemplate: e.target.value })}
+                style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
+              />
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20, flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+              <div className="setting-info">
+                <span className="setting-label">Renewal Reminder SMS Template</span>
+                <span className="setting-description">
+                  Sent from <strong>Reports → Send Reminders</strong> to members expiring within 3 days.
+                  Placeholders: {'{{gym}}'} {'{{name}}'} {'{{plan}}'} {'{{date}}'} {'{{days}}'}
+                </span>
+              </div>
+              <textarea
+                className="input"
+                rows={3}
+                value={settings.renewalSmsTemplate}
+                onChange={(e) => setSettings({ ...settings, renewalSmsTemplate: e.target.value })}
+                style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
+              />
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Gateway Status</span>
+                <span className="setting-description">
+                  Live verification of your PhilSMS token — the app checks the account balance on boot and every 60 seconds.
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {smsStatus && (
+                  <span className={`sms-status-pill ${smsStatus.verified ? 'ok' : smsStatus.kind === 'off' || smsStatus.kind === 'simulator' ? 'idle' : 'bad'}`}>
+                    <span className="sms-status-dot" />
+                    {smsStatus.message}
+                  </span>
+                )}
+                <button type="button" className="btn btn-secondary btn-sm" onClick={handleVerifySms}>
+                  Verify Connection
+                </button>
+              </div>
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: 'none' }}>
+              <div className="setting-info">
+                <span className="setting-label">Send Test SMS</span>
+                <span className="setting-description">
+                  Send a sample message (using the template above) to a Philippine mobile number, e.g. 09171234567
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="tel"
+                  className="input"
+                  value={smsTestPhone}
+                  onChange={(e) => setSmsTestPhone(e.target.value)}
+                  placeholder="09171234567"
+                  style={{ width: 180 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleSendTestSms}
+                  disabled={!smsTestPhone.trim()}
+                >
+                  Send Test
+                </button>
+              </div>
+            </div>
+
+            {smsLogs.length > 0 && (
+              <div className="setting-item" style={{ borderBottom: 'none', flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+                <div className="setting-info">
+                  <span className="setting-label">Recent Messages</span>
+                  <span className="setting-description">Latest entries from the SMS outbox — FAILED messages can be retried</span>
+                </div>
+                <div style={{ width: '100%', display: 'grid', gap: 6 }}>
+                  {smsLogs.map(log => (
+                    <div
+                      key={log.id}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+                    >
+                      <span className={`sms-log-status ${log.status.toLowerCase()}`}>{log.status}</span>
+                      <span style={{ fontFamily: 'monospace' }}>{log.recipient}</span>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-muted)' }} title={log.message}>{log.message}</span>
+                      {log.status === 'FAILED' && log.last_error && (
+                        <span style={{ color: 'var(--danger)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.last_error}>{log.last_error}</span>
+                      )}
+                      {log.status === 'FAILED' && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRetrySms(log.id)}>Retry</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {smsBanner.type !== 'none' && (
+            <div className={`banner banner-${smsBanner.type}`} style={{ marginTop: 12 }}>
+              <span className="banner-text">
+                {smsBanner.type === 'loading' && '⏳ '}
+                {smsBanner.type === 'success' && '✅ '}
+                {smsBanner.type === 'error' && '❌ '}
+                {smsBanner.message}
+              </span>
+              {smsBanner.type !== 'loading' && (
+                <button className="banner-dismiss" onClick={() => setSmsBanner({ type: 'none' })}>✕</button>
               )}
             </div>
           )}

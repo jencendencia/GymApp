@@ -937,13 +937,16 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
     try {
       const res = await window.electronAPI.sendRenewalReminders()
       if (res.success) {
+        // Email (7-day window) + SMS (3-day window) counts, each deduped per channel
+        const emailPart = `Email: ${res.sent} sent${res.skipped > 0 ? `, ${res.skipped} skipped` : ''}`
+        const smsPart = `SMS: ${res.smsSent ?? 0} sent${(res.smsSkipped ?? 0) > 0 ? `, ${res.smsSkipped} skipped` : ''}`
         setReminderState({
           sending: false,
-          result: `Renewal reminders sent to ${res.sent} member${res.sent === 1 ? '' : 's'}${res.skipped > 0 ? ` (${res.skipped} skipped — already sent or no email)` : ''}.`,
+          result: `Renewal reminders sent — ${emailPart} · ${smsPart}.`,
           error: null,
         })
       } else {
-        setReminderState({ sending: false, result: null, error: res.message || 'Failed to send reminders. Check SMTP settings.' })
+        setReminderState({ sending: false, result: null, error: res.message || 'Failed to send reminders. Check SMTP or SMS settings.' })
       }
     } catch (error: any) {
       setReminderState({ sending: false, result: null, error: error.message })
@@ -1048,8 +1051,8 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
           <button className="btn btn-primary btn-sm" onClick={exportPDF} title="Print / Export as PDF">
             🖨️ PDF
           </button>
-          <button className="btn btn-sm" onClick={handleSendRenewalReminders} disabled={reminderState.sending} title="Email renewal reminders to members expiring within 7 days" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
-            {reminderState.sending ? 'Sending...' : '📧 Reminders'}
+          <button className="btn btn-sm" onClick={handleSendRenewalReminders} disabled={reminderState.sending} title="Send renewal reminders — email to members expiring in 7 days, SMS to members expiring in 3 days" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+            {reminderState.sending ? 'Sending...' : '📨 Reminders'}
           </button>
           <button className="btn btn-sm" onClick={() => { openEmailModal() }} title="Send report via email" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}>
             📧 Email

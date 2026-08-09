@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './Kiosk.css'
 import jsQR from 'jsqr'
-import { Member, Plan, DailyReport, StaffFingerprintTemplateInfo } from '../types/electron'
+import { Member, Plan, DailyReport, StaffFingerprintTemplateInfo, SmsStatus } from '../types/electron'
 import { log } from '../lib/logger'
 import { todayLocal, todayLocalOf } from '../lib/dates'
 import { formatMoney } from '../lib/format'
@@ -104,6 +104,8 @@ function Kiosk({ onRefresh }: KioskProps) {
   const [guestSubmitting, setGuestSubmitting] = useState(false)
   const [guestSuccess, setGuestSuccess] = useState(false)
   const [guestCount, setGuestCount] = useState(0)
+  // Cloud SMS (PhilSMS) gateway status — kiosk status dot (PHILSMS_SETUP_GUIDE.md)
+  const [smsStatus, setSmsStatus] = useState<SmsStatus | null>(null)
   // Idle promo slideshow (P2 5.1)
   const [promoIndex, setPromoIndex] = useState(0)
   const [promoInterval, setPromoInterval] = useState<ReturnType<typeof setInterval> | null>(null)
@@ -182,6 +184,14 @@ function Kiosk({ onRefresh }: KioskProps) {
       } catch {}
     }
     loadKioskConfig()
+  }, [])
+
+  // Live PhilSMS gateway status (broadcast from the main process on boot +
+  // every 60s). Shown as a small status dot on the kiosk screen.
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onSmsStatus((status) => setSmsStatus(status))
+    window.electronAPI.getSmsStatus().then(setSmsStatus).catch(() => {})
+    return unsubscribe
   }, [])
 
   // Keep stateRef in sync
@@ -1889,6 +1899,14 @@ function Kiosk({ onRefresh }: KioskProps) {
 
   return (
     <div className="kiosk">
+      {/* SMS gateway status dot (PHILSMS_SETUP_GUIDE.md) — live verification
+          result for PhilSMS, broadcast from the main process. */}
+      {smsStatus && smsStatus.kind !== 'off' && (
+        <div className={`kiosk-sms-chip ${smsStatus.verified ? 'ok' : smsStatus.kind === 'simulator' ? 'idle' : 'bad'}`}>
+          <span className="kiosk-sms-dot" />
+          <span className="kiosk-sms-text">{smsStatus.message}</span>
+        </div>
+      )}
       {/* Cross-fade state screens — always mounted, faded via .active so the
           kiosk never unmounts/remounts a full screen (that flash was the flicker) */}
       <div className="kiosk-screens">

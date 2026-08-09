@@ -137,6 +137,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSetting: (key: string, value: string) => ipcRenderer.invoke('save-setting', key, value),
   saveSettings: (settings: Record<string, string>) => ipcRenderer.invoke('save-settings', settings),
 
+  // Cloud SMS (PhilSMS)
+  verifySms: () => ipcRenderer.invoke('verify-sms'),
+  getSmsStatus: () => ipcRenderer.invoke('get-sms-status'),
+  sendTestSms: (recipient: string) => ipcRenderer.invoke('send-test-sms', recipient),
+  getSmsLogs: (limit?: number) => ipcRenderer.invoke('get-sms-logs', limit),
+  retrySms: (id: number) => ipcRenderer.invoke('retry-sms', id),
+  onSmsStatus: (callback: (status: any) => void) => {
+    const handler = (_: any, status: any) => callback(status)
+    ipcRenderer.on('sms-status', handler)
+    return () => ipcRenderer.removeListener('sms-status', handler)
+  },
+
   // Theme
   getTheme: () => ipcRenderer.invoke('get-setting', 'theme'),
   saveTheme: (theme: string) => ipcRenderer.invoke('save-setting', 'theme', theme),

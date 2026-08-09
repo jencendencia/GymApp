@@ -11,6 +11,7 @@ import nodemailer from 'nodemailer'
 import { autoUpdater } from 'electron-updater'
 import { todayLocal, nowUtc, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays, REFERRAL_POINTS, FREE_MONTH_POINTS, FREE_MONTH_DAYS } from './utils'
 import { Worker } from 'worker_threads'
+import * as sms from './sms'
 
 let mainWindow: BrowserWindow | null = null
 let kioskWindow: BrowserWindow | null = null
@@ -205,7 +206,7 @@ function verifyPassword(password: string, stored: string | null | undefined): bo
 // so a copied database file doesn't leak credentials. Values are prefixed so we can
 // distinguish ciphertext from legacy plaintext and from non-secret settings.
 const SECRET_PREFIX = 'enc:v1:'
-const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail', 'backupPassword'])
+const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail', 'backupPassword', 'cloudApiKey'])
 
 function isSecretSetting(key: string): boolean {
   return SECRET_KEYS.has(key)
@@ -227,7 +228,7 @@ function encryptSecret(value: string): string {
   }
 }
 
-function decryptSecret(value: string | null | undefined): string {
+export function decryptSecret(value: string | null | undefined): string {
   if (!value) return value || ''
   if (!value.startsWith(SECRET_PREFIX)) return value // legacy plaintext or non-secret
   if (!safeStorage.isEncryptionAvailable()) {
@@ -267,7 +268,8 @@ function recordFailedLogin(username: string) {
 
 // ── Structured file logging (P2 6.8) ──
 // Writes rotating JSONL logs to userData/logs/repcheck.log (max ~2MB per file, keeps 3).
-function logMain(level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) {
+// Exported so the SMS module can log provider responses for diagnosis.
+export function logMain(level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>) {
   try {
     const logDir = path.join(app.getPath('userData'), 'logs')
     fs.mkdirSync(logDir, { recursive: true })
@@ -473,6 +475,23 @@ function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       checked_out_at DATETIME DEFAULT NULL
     );
+
+    -- Cloud SMS outbox (PhilSMS — PHILSMS_SETUP_GUIDE.md). Messages are queued
+    -- PENDING and the queue worker sends them (retries up to 5x, then FAILED).
+    CREATE TABLE IF NOT EXISTS sms_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient TEXT NOT NULL,
+      sender_id TEXT,
+      message TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'plain' CHECK(type IN ('plain', 'unicode')),
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'SENT', 'FAILED')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sent_at DATETIME
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sms_logs_status ON sms_logs(status);
   `)
 
   // Migrate existing databases: add columns if they don't exist
@@ -526,6 +545,23 @@ function initDatabase() {
     db?.prepare('INSERT INTO staff (username, password_hash, role, display_name) VALUES (?, ?, ?, ?)')
       .run('admin', hash, 'admin', 'Administrator')
     logMain('info', 'Default admin user created (admin/admin)')
+  }
+
+  // Optional env seeding for cloud SMS (PHILSMS_SETUP_GUIDE.md appendix) —
+  // CLOUD_PROVIDER / CLOUD_API_KEY / CLOUD_SENDER are used as defaults until
+  // changed in Settings.
+  const envSeed: [string, string | undefined][] = [
+    ['cloudProvider', process.env.CLOUD_PROVIDER],
+    ['cloudApiKey', process.env.CLOUD_API_KEY],
+    ['cloudSender', process.env.CLOUD_SENDER],
+  ]
+  for (const [key, value] of envSeed) {
+    if (!value) continue
+    const existing = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
+    if (!existing?.value) {
+      const stored = isSecretSetting(key) ? encryptSecret(value) : value
+      db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, stored)
+    }
   }
 
   // ── Indexes on hot query columns (P1 4.1) ──
@@ -1384,11 +1420,12 @@ function buildBackupJson(): string {
     payments: db.prepare('SELECT * FROM payments').all() as any[],
     coaches: db.prepare('SELECT * FROM coaches').all() as any[],
     coach_fee_payments: db.prepare('SELECT * FROM coach_fee_payments').all() as any[],
-staff: db.prepare('SELECT * FROM staff').all() as any[],
+    staff: db.prepare('SELECT * FROM staff').all() as any[],
     staff_fingerprints: db.prepare('SELECT * FROM staff_fingerprints').all() as any[],
     activity_logs: db.prepare('SELECT * FROM activity_logs').all() as any[],
     reminders: db.prepare('SELECT * FROM reminders').all() as any[],
     guest_checkins: db.prepare('SELECT * FROM guest_checkins').all() as any[],
+    sms_logs: db.prepare('SELECT * FROM sms_logs').all() as any[],
     settings: db.prepare('SELECT * FROM settings').all() as any[],
   }
   const serialize = (data: any[]): any[] =>
@@ -1982,6 +2019,19 @@ function setupIPC() {
       }
 
       broadcastDataChanged(event.sender)
+
+      // Cloud SMS (PhilSMS): queue a check-in alert to the member's phone when
+      // SMS delivery is enabled and the member has a Philippine mobile number.
+      // Only real entries (success / staff override) alert — failed scan rows
+      // are diagnostic and never message the member.
+      if (checkin.status !== 'failed') {
+        try {
+          sms.queueCheckinSms(member)
+        } catch (error: any) {
+          logMain('warn', 'Check-in SMS queue failed', { memberId: checkin.member_id, error: error.message })
+        }
+      }
+
       return { success: true, id: res?.lastInsertRowid }
     } catch (error: any) {
       console.error('create-checkin error:', error)
@@ -2362,6 +2412,32 @@ function setupIPC() {
     insertMany(Object.entries(settings))
   })
 
+  // ── Cloud SMS (PhilSMS — PHILSMS_SETUP_GUIDE.md) ──
+  ipcMain.handle('verify-sms', async () => {
+    try {
+      return await sms.refreshSmsStatus()
+    } catch (error: any) {
+      return { verified: false, kind: 'error', balance: null, message: error.message, checkedAt: Date.now() }
+    }
+  })
+
+  ipcMain.handle('get-sms-status', () => sms.getCurrentSmsStatus())
+
+  ipcMain.handle('send-test-sms', async (_, recipient: string) => {
+    try {
+      return await sms.sendTestSms(String(recipient || ''))
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('get-sms-logs', (_, limit?: number) => sms.getSmsLogs(limit || 50))
+
+  ipcMain.handle('retry-sms', (_, id: number) => {
+    sms.retrySmsLog(Number(id))
+    return { success: true }
+  })
+
   ipcMain.handle('create-backup', async () => {
     try {
       if (!db) throw new Error('Database not initialized')
@@ -2500,6 +2576,7 @@ ipcMain.handle('restore-backup', async (event, passwordArg?: string) => {
         db!.exec('DELETE FROM reminders')
         db!.exec('DELETE FROM activity_logs')
         db!.exec('DELETE FROM guest_checkins')
+        db!.exec('DELETE FROM sms_logs')
         db!.exec('DELETE FROM members')
         db!.exec('DELETE FROM plans')
         db!.exec('DELETE FROM coaches')
@@ -2530,7 +2607,8 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
         if (deserialized.staff_fingerprints) insertRows('staff_fingerprints', deserialized.staff_fingerprints)
         if (deserialized.activity_logs) insertRows('activity_logs', deserialized.activity_logs)
         if (deserialized.reminders) insertRows('reminders', deserialized.reminders)
-if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest_checkins)
+        if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest_checkins)
+        if (deserialized.sms_logs) insertRows('sms_logs', deserialized.sms_logs)
         if (deserialized.settings) insertRows('settings', deserialized.settings)
       })
 
@@ -3115,69 +3193,155 @@ if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest
     return atRisk
   })
 
-  // ── Renewal reminder emails (deduplicated via reminders table) ──
+  // ── Renewal reminders (deduplicated per channel via reminders table) ──
+  // Email goes to members expiring within 7 days; SMS (PhilSMS) to members
+  // expiring within 3 days — the 3/1-day escalation window. Each channel has
+  // its own dedup so a member who already got an email can still get an SMS
+  // (and vice versa). SMS is queued through the same worker as check-in
+  // alerts, so the simulator + outbox retry apply automatically.
   ipcMain.handle('send-renewal-reminders', async () => {
     try {
-      const { transport, fromEmail } = createSmtpTransport()
       const today = todayLocal()
       const appNameRow = db?.prepare("SELECT value FROM settings WHERE key = 'appName'").get() as any
       const appDisplayName = appNameRow?.value || 'REPCHECK'
 
-      // Active members with an email expiring in the next 7 days
-      const expiring = db?.prepare(`
-        SELECT m.id, m.name, m.email, m.plan_end, p.name as plan_name
-        FROM members m
-        LEFT JOIN plans p ON m.plan_id = p.id
-        WHERE m.status = 'active' AND m.archived = 0 AND m.email IS NOT NULL AND m.email != ''
-          AND m.plan_end IS NOT NULL AND m.plan_end != ''
-          AND m.plan_end BETWEEN ? AND date(?, '+7 days')
-      `).all(today, today) as any[] || []
+      const results: { member_id: number; name: string; channel: string; sent: boolean; message: string }[] = []
 
-      const results: { member_id: number; name: string; sent: boolean; message: string }[] = []
-
-      for (const member of expiring) {
-        // Dedupe: skip if a renewal reminder was sent in the last 7 days
-        const recent = db?.prepare(`
-          SELECT COUNT(*) as count FROM reminders
-          WHERE member_id = ? AND type = 'renewal_reminder' AND sent_at >= datetime('now', '-7 days')
-        `).get(member.id) as any
-        if (recent?.count > 0) {
-          results.push({ member_id: member.id, name: member.name, sent: false, message: 'Reminder already sent recently' })
-          continue
-        }
-
-        const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
-        const endLabel = new Date(member.plan_end + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-        const html = `
-          <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;color:#222">
-            <h2 style="color:#1a1a2e;margin:0 0 4px">Hi ${member.name},</h2>
-            <p>Your <strong>${member.plan_name || 'membership'}</strong> plan at <strong>${appDisplayName}</strong> expires on <strong>${endLabel}</strong> (${daysLeft} day${daysLeft === 1 ? '' : 's'} left).</p>
-            <p>Renew at the front desk to keep your membership active without interruption.</p>
-            <p style="color:#888;font-size:12px;margin-top:24px">— ${appDisplayName} · This is an automated reminder.</p>
-          </div>`
-
-        await transport.sendMail({
-          from: `"${appDisplayName}" <${fromEmail}>`,
-          to: member.email,
-          subject: `Your ${appDisplayName} membership expires soon`,
-          html,
-        })
-
-        db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
-          .run(member.id, 'renewal_reminder', 'email')
-        results.push({ member_id: member.id, name: member.name, sent: true, message: 'Sent' })
+      // ── Email pass (SMTP optional — skipped when not configured) ──
+      let emailSent = 0
+      let emailSkipped = 0
+      let transport: ReturnType<typeof createSmtpTransport>['transport'] | null = null
+      let sender = ''
+      try {
+        const smtp = createSmtpTransport()
+        transport = smtp.transport
+        sender = smtp.fromEmail
+      } catch {
+        transport = null // SMTP not configured — email pass is skipped
       }
 
-      transport.close()
+      if (transport) {
+
+        // Active members with an email expiring in the next 7 days
+        const expiring = db?.prepare(`
+          SELECT m.id, m.name, m.email, m.plan_end, p.name as plan_name
+          FROM members m
+          LEFT JOIN plans p ON m.plan_id = p.id
+          WHERE m.status = 'active' AND m.archived = 0 AND m.email IS NOT NULL AND m.email != ''
+            AND m.plan_end IS NOT NULL AND m.plan_end != ''
+            AND m.plan_end BETWEEN ? AND date(?, '+7 days')
+        `).all(today, today) as any[] || []
+
+        for (const member of expiring) {
+          // Dedupe per channel: skip if an EMAIL reminder was sent in the last 7 days
+          const recent = db?.prepare(`
+            SELECT COUNT(*) as count FROM reminders
+            WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'email' AND sent_at >= datetime('now', '-7 days')
+          `).get(member.id) as any
+          if (recent?.count > 0) {
+            results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: 'Email reminder already sent recently' })
+            emailSkipped++
+            continue
+          }
+
+          const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
+          const endLabel = new Date(member.plan_end + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+          const html = `
+            <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;color:#222">
+              <h2 style="color:#1a1a2e;margin:0 0 4px">Hi ${member.name},</h2>
+              <p>Your <strong>${member.plan_name || 'membership'}</strong> plan at <strong>${appDisplayName}</strong> expires on <strong>${endLabel}</strong> (${daysLeft} day${daysLeft === 1 ? '' : 's'} left).</p>
+              <p>Renew at the front desk to keep your membership active without interruption.</p>
+              <p style="color:#888;font-size:12px;margin-top:24px">— ${appDisplayName} · This is an automated reminder.</p>
+            </div>`
+
+          // Per-member try/catch: one rejected recipient must not abort the
+          // whole run — the SMS pass below should still go out.
+          try {
+            await transport.sendMail({
+              from: `"${appDisplayName}" <${sender}>`,
+              to: member.email,
+              subject: `Your ${appDisplayName} membership expires soon`,
+              html,
+            })
+          } catch (error: any) {
+            results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: `Send failed: ${error.message}` })
+            emailSkipped++
+            continue
+          }
+
+          db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
+            .run(member.id, 'renewal_reminder', 'email')
+          results.push({ member_id: member.id, name: member.name, channel: 'email', sent: true, message: 'Sent' })
+          emailSent++
+        }
+        transport.close()
+      }
+
+      // ── SMS pass (PhilSMS — gated on the delivery channel) ──
+      let smsSent = 0
+      let smsSkipped = 0
+      if (sms.getSmsConfig().channel !== 'off') {
+        // Active members with a phone expiring within 3 days (3/1-day window)
+        const expiringSms = db?.prepare(`
+          SELECT m.id, m.name, m.phone, m.plan_end, p.name as plan_name
+          FROM members m
+          LEFT JOIN plans p ON m.plan_id = p.id
+          WHERE m.status = 'active' AND m.archived = 0 AND m.phone IS NOT NULL AND m.phone != ''
+            AND m.plan_end IS NOT NULL AND m.plan_end != ''
+            AND m.plan_end BETWEEN ? AND date(?, '+3 days')
+        `).all(today, today) as any[] || []
+
+        for (const member of expiringSms) {
+          const recipient = sms.normalizePhPhone(member.phone)
+          if (!recipient) {
+            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'Invalid phone number' })
+            smsSkipped++
+            continue
+          }
+          // Dedupe per channel: skip if an SMS reminder was queued in the last
+          // 7 days. NOTE: the row is recorded at QUEUE time — if the worker later
+          // flags the message FAILED (no credits, sender ID unapproved), retry it
+          // from the SMS outbox in Settings; it won't be re-queued automatically
+          // until the 7-day window passes.
+          const recent = db?.prepare(`
+            SELECT COUNT(*) as count FROM reminders
+            WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'sms' AND sent_at >= datetime('now', '-7 days')
+          `).get(member.id) as any
+          if (recent?.count > 0) {
+            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS reminder already queued recently' })
+            smsSkipped++
+            continue
+          }
+
+          const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
+          const id = sms.queueRenewalSms(member, member.plan_name || 'membership', daysLeft)
+          if (id) {
+            db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
+              .run(member.id, 'renewal_reminder', 'sms')
+            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: true, message: 'Queued for delivery' })
+            smsSent++
+          } else {
+            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS delivery off or template empty' })
+            smsSkipped++
+          }
+        }
+      }
+
+      const anyConfigured = transport !== null || sms.getSmsConfig().channel !== 'off'
+      if (!anyConfigured) {
+        return { success: false, message: 'No delivery channel configured — set up SMTP (email) or enable SMS in Settings.', sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results }
+      }
       return {
         success: true,
-        sent: results.filter(r => r.sent).length,
-        skipped: results.filter(r => !r.sent).length,
+        sent: emailSent,
+        skipped: emailSkipped,
+        smsSent,
+        smsSkipped,
         results,
       }
     } catch (error: any) {
       console.error('send-renewal-reminders error:', error)
-      return { success: false, message: error.message, sent: 0, skipped: 0, results: [] }
+      return { success: false, message: error.message, sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results: [] }
     }
   })
 
@@ -3366,6 +3530,12 @@ app.whenReady().then(async () => {
     console.log('Auto-backup scheduler started')
     setupAutoReport()
     console.log('Auto-report scheduler started')
+    // Cloud SMS (PhilSMS): delivery queue worker + periodic gateway verification
+    if (db) {
+      sms.startSmsQueueWorker(db)
+      sms.startSmsVerifier(db)
+      console.log('SMS queue worker + verifier started')
+    }
   } catch (error) {
     console.error('Failed to start app:', error)
   }

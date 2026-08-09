@@ -503,3 +503,83 @@
   display: flex;
   gap: 8px;
 }
+
+/* ── Cloud SMS (PhilSMS) gateway status pill ── */
+.sms-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  max-width: 420px;
+}
+
+.sms-status-pill .sms-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sms-status-pill.ok {
+  color: var(--accent);
+  border-color: rgba(52, 199, 89, 0.4);
+  background: rgba(52, 199, 89, 0.08);
+}
+
+.sms-status-pill.ok .sms-status-dot {
+  background: #34c759;
+  box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.15);
+}
+
+.sms-status-pill.bad {
+  color: var(--danger);
+  border-color: rgba(255, 69, 58, 0.4);
+  background: rgba(255, 69, 58, 0.08);
+}
+
+.sms-status-pill.bad .sms-status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(255, 69, 58, 0.15);
+}
+
+.sms-status-pill.idle {
+  color: var(--text-muted);
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.sms-status-pill.idle .sms-status-dot {
+  background: var(--text-muted);
+}
+
+/* SMS outbox row status badges */
+.sms-log-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  flex-shrink: 0;
+}
+
+.sms-log-status.pending {
+  background: rgba(255, 170, 0, 0.12);
+  color: #ffb020;
+}
+
+.sms-log-status.sent {
+  background: rgba(52, 199, 89, 0.12);
+  color: #34c759;
+}
+
+.sms-log-status.failed {
+  background: rgba(255, 69, 58, 0.12);
+  color: #ff453a;
+}
