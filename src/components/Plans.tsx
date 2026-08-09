@@ -4,11 +4,13 @@ import { Plan, StaffUser } from '../types/electron'
 import { log } from '../lib/logger'
 import { notifyDataChanged, useDataVersion } from '../lib/data'
 import { formatMoney } from '../lib/format'
+import { useToast } from '../lib/toast'
 import ConfirmModal from './ConfirmModal'
 
 function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const isAdmin = currentUser?.role === 'admin'
   const dataVersion = useDataVersion()
+  const { showToast } = useToast()
   const [plans, setPlans] = useState<Plan[]>([])
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
@@ -19,7 +21,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   // prefilled with 0 until the spinner is used. Values are converted on submit.
   const [formData, setFormData] = useState({
     name: '',
-    type: 'monthly' as 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family',
+    type: 'monthly' as 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family' | 'daily',
     duration_days: '30',
     sessions: '0',
     price: '',
@@ -50,8 +52,10 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       resetForm()
       notifyDataChanged()
       log.createPlan(result.lastInsertRowid as number, formData.name, Number(formData.price))
-    } catch (error) {
+      showToast('success', `Plan "${formData.name}" created.`)
+    } catch (error: any) {
       console.error('Failed to create plan:', error)
+      showToast('error', error?.message || 'Failed to create plan.')
     }
   }
 
@@ -68,6 +72,7 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       setSelectedPlan(null)
       resetForm()
       notifyDataChanged()
+      showToast('success', `Plan "${formData.name}" updated.`)
       
       // Build changes object
       const changedFields: Record<string, any> = {}
@@ -77,8 +82,9 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       if (Object.keys(changedFields).length > 0) {
         log.updatePlan(selectedPlan.id, formData.name, changedFields)
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update plan:', error)
+      showToast('error', error?.message || 'Failed to update plan.')
     }
   }
 
@@ -91,8 +97,10 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       if (plan) {
         log.deletePlan(id, plan.name)
       }
-    } catch (error) {
+      showToast('success', `Plan "${plan?.name || ''}" deleted.`)
+    } catch (error: any) {
       console.error('Failed to delete plan:', error)
+      showToast('error', error?.message || 'Failed to delete plan.')
     }
   }
 
@@ -215,13 +223,23 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                   <select
                     className="input"
                     value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                    onChange={(e) => {
+                      const type = e.target.value as any
+                      setFormData({
+                        ...formData,
+                        type,
+                        // Daily plans last one day by default
+                        duration_days: type === 'daily' ? '1' : formData.duration_days,
+                        // Sessions only apply to per-session plans
+                        sessions: type === 'session_pack' ? formData.sessions : '0',
+                      })
+                    }}
                   >
                     <option value="monthly">Monthly</option>
                     <option value="quarterly">Quarterly</option>
-                    <option value="annual">Annual</option>
-                    <option value="session_pack">Per Session</option>
-                    <option value="family">Family</option>
+                    <option value="annual">Annual</option>                  <option value="session_pack">Per Session</option>
+                  <option value="family">Family</option>
+                  <option value="daily">Daily</option>
                   </select>
                 </div>
                 <div className="form-group">
@@ -246,16 +264,18 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     min="0"
                   />
                 </div>
-                <div className="form-group">
-                  <label>Sessions (for per-session plans)</label>
-                  <input
-                    type="number"
-                    className="input"
-                    value={formData.sessions}
-                    onChange={(e) => setFormData({ ...formData, sessions: e.target.value })}
-                    min="0"
-                  />
-                </div>
+                {formData.type === 'session_pack' && (
+                  <div className="form-group">
+                    <label>Sessions (for per-session plans)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      value={formData.sessions}
+                      onChange={(e) => setFormData({ ...formData, sessions: e.target.value })}
+                      min="0"
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="modal-footer">

@@ -45,6 +45,7 @@
 :root[data-theme='light'] .status-badge.active { background: rgba(127, 184, 0, 0.14); }
 :root[data-theme='light'] .status-badge.expired { background: rgba(214, 69, 69, 0.12); }
 :root[data-theme='light'] .status-badge.warning { background: rgba(199, 126, 0, 0.12); }
+:root[data-theme='light'] .status-badge.frozen { background: rgba(47, 127, 209, 0.12); }
 :root[data-theme='light'] .toast { box-shadow: 0 8px 24px rgba(20, 30, 50, 0.18); }
 
 /* P2 5.7: Loading skeleton shimmer */
@@ -222,6 +223,11 @@ body {
   color: var(--warn);
 }
 
+.status-badge.frozen {
+  background: rgba(77, 168, 255, 0.15);
+  color: var(--info);
+}
+
 /* Button styles */
 .btn {
   display: inline-flex;
@@ -348,7 +354,7 @@ body {
      layout scales with the viewport height (see the vh clamps below). No top
      padding either — the idle logo is meant to start flush at the very top of
      the frameless kiosk window (the bottom card floats with its own offset). */
-  padding: 0 40px;
+  padding: 0;
   overflow: hidden;
 }
 

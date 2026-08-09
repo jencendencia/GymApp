@@ -11,10 +11,17 @@ export interface ElectronAPI {
   createMember: (member: CreateMemberInput) => Promise<any>
   updateMember: (id: number, member: UpdateMemberInput) => Promise<any>
   deleteMember: (id: number) => Promise<any>
+  // P3: Plan freeze (admin-only)
+  freezeMember: (id: number, freezeData: { reason: string; custom_reason?: string; days: number; attachment?: string }) => Promise<{ success: boolean; message?: string }>
+  unfreezeMember: (id: number) => Promise<{ success: boolean; message?: string }>
+  autoResumeFrozenPlans: () => Promise<{ resumed: number }>
   searchMembers: (query: string) => Promise<Member[]>
   getMembersPage: (opts?: { offset?: number; limit?: number; search?: string }) => Promise<{ rows: Member[]; total: number; offset: number; limit: number }>
   checkMemberIdExists: (memberId: string) => Promise<{ id: number; name: string } | null>
   getLastMemberId: () => Promise<{ last: number; next: number }>
+
+  // Referral rewards (P2 5.8)
+  redeemFreeMonth: (memberId: number) => Promise<{ success: boolean; message?: string; planEnd?: string; points?: number }>
 
   // Plans
   getPlans: () => Promise<Plan[]>
@@ -118,6 +125,7 @@ export interface ElectronAPI {
   // Settings
   getSettings: () => Promise<Record<string, string>>
   getSetting: (key: string) => Promise<string | null>
+  getSecretStatus: (key: string) => Promise<{ stored: boolean; decrypted: boolean }>
   saveSetting: (key: string, value: string) => Promise<void>
   saveSettings: (settings: Record<string, string>) => Promise<void>
 
@@ -195,6 +203,17 @@ export interface Member {
   coach_name?: string
   plan_type?: string
   plan_sessions?: number
+  /** Member who referred this member (P2 5.8 referral rewards). */
+  referrer_id?: number
+  /** Referral reward points balance — 100 points redeem for 1 free month. */
+  points?: number
+  /** P3: Plan freeze status */
+  frozen?: number
+  freeze_reason?: string
+  freeze_days?: number
+  freeze_start?: string
+  freeze_end?: string
+  freeze_attachment?: string
 }
 
 export interface CreateMemberInput {
@@ -218,6 +237,8 @@ export interface CreateMemberInput {
   waiver_agreed_at?: string
   waiver_template_id?: number
   auto_renew?: number
+  /** Member who referred this member — referrer earns 20 reward points (P2 5.8). */
+  referrer_id?: number
 }
 
 export interface UpdateMemberInput {
@@ -247,7 +268,7 @@ export interface UpdateMemberInput {
 export interface Plan {
   id: number
   name: string
-  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family'
+  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family' | 'daily'
   duration_days?: number
   sessions?: number
   price: number
@@ -256,7 +277,7 @@ export interface Plan {
 
 export interface CreatePlanInput {
   name: string
-  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family'
+  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family' | 'daily'
   duration_days?: number
   sessions?: number
   price: number
@@ -264,7 +285,7 @@ export interface CreatePlanInput {
 
 export interface UpdatePlanInput {
   name: string
-  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family'
+  type: 'monthly' | 'quarterly' | 'annual' | 'session_pack' | 'family' | 'daily'
   duration_days?: number
   sessions?: number
   price: number
@@ -322,6 +343,18 @@ export interface CreatePaymentInput {
   staff_id?: number
 }
 
+/** Per-coach summary embedded in daily/monthly reports (P3 coach report).
+ *  periodCollected is the fee revenue for the report period (day or month). */
+export interface ReportCoachSummary {
+  coach_id: number
+  coach_name: string
+  specialty?: string | null
+  totalMembers: number
+  activeMembers: number
+  periodCollected: number
+  totalCollected: number
+}
+
 export interface DailyReport {
   date: string
   totalRevenue: number
@@ -332,6 +365,7 @@ export interface DailyReport {
   renewals: number
   outstandingCount: number
   outstanding: { id: number; member_id: string; name: string; balance: number }[]
+  coaches: ReportCoachSummary[]
 }
 
 export interface MonthlyReportWeek {
@@ -355,6 +389,7 @@ export interface MonthlyReport {
   outstandingCount: number
   activeMemberCount: number
   avgRevenuePerMember: number
+  coaches: ReportCoachSummary[]
 }
 
 export interface CoachFeePayment {

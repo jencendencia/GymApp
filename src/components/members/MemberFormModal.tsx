@@ -27,6 +27,8 @@ export interface MemberFormData {
   balance: number
   status: 'active' | 'inactive' | 'expired'
   photo: string
+  /** Member who referred this new member (0 = none) — they earn 20 points (P2 5.8). */
+  referrer_id: number
 }
 
 export interface PaymentFormData {
@@ -68,6 +70,8 @@ interface MemberFormModalProps {
   selectedMember: Member | null
   plans: Plan[]
   coaches: Coach[]
+  /** All active members — options for the "Referred By" dropdown (P2 5.8). */
+  members: Member[]
   formData: MemberFormData
   onFormDataChange: (d: MemberFormData) => void
   paymentForm: PaymentFormData
@@ -118,7 +122,7 @@ interface MemberFormModalProps {
 /** Create / edit member form modal (photo, fingerprint, waiver, personal info, plan, coaching, payments) (P2 6.6). */
 function MemberFormModal(props: MemberFormModalProps) {
   const {
-    selectedMember, plans, coaches, formData, onFormDataChange, paymentForm, onPaymentFormChange,
+    selectedMember, plans, coaches, members, formData, onFormDataChange, paymentForm, onPaymentFormChange,
     photoPreview, initialFingers, captureFinger, onFingerprintsChange, waiverAgreed, waiverAgreedAt,
     waiverTemplates, waiverTemplateId, onWaiverTemplateChange, validationAttempted, shakeKey, missingRequired,
     memberIdWarning, checkingMemberId, lastMemberId, lastMemberIdLoaded,
@@ -543,6 +547,42 @@ function MemberFormModal(props: MemberFormModalProps) {
                         <input type="date" className="input" value={formData.coaching_end} onChange={(e) => setFormData({ coaching_end: e.target.value })} />
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Referral (P2 5.8): who referred this new member — the referrer
+                  earns 20 reward points, redeemable for a free month at 100 pts. */}
+              {!selectedMember && (
+                <div className="member-form-card">
+                  <h3 className="section-label">🎁 Referral</h3>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Referred By</label>
+                      <select
+                        className="input"
+                        value={formData.referrer_id}
+                        onChange={(e) => setFormData({ referrer_id: Number(e.target.value) })}
+                      >
+                        <option value={0}>— No referral —</option>
+                        {[...members]
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((m) => (
+                            <option key={m.id} value={m.id}>{m.name} ({m.member_id})</option>
+                          ))}
+                      </select>
+                      {formData.referrer_id > 0 && (() => {
+                        const referrer = members.find(m => m.id === formData.referrer_id)
+                        return (
+                          <span className="field-hint">
+                            ⭐ {referrer?.name || 'This member'} will earn <strong>20 points</strong> for this referral.
+                          </span>
+                        )
+                      })()}
+                      <span className="field-hint">
+                        Members earn 20 points per referral — 100 points = 1 month of free membership.
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}

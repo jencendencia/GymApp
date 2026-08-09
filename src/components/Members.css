@@ -97,6 +97,18 @@
   width: 300px;
 }
 
+/* Daily quick-enroll button — accent-tinted to stand apart from Add Member */
+.btn-daily {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.btn-daily:hover {
+  background: rgba(198, 255, 61, 0.1);
+  transform: translateY(-1px);
+}
+
 .members-table-container {
   flex: 1;
   overflow: auto;
@@ -214,6 +226,19 @@
   overflow-y: auto;
   padding: 40px 24px;
   z-index: 1000;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  animation: fade-in 0.2s ease;
 }
 
 .modal {
@@ -1407,5 +1432,276 @@
 
 .newplan-payment-summary .summary-row.summary-total .danger {
   color: var(--danger, #e5484d);
+}
+
+/* ── P3: Freeze Plan Modal ── */
+.freeze-modal {
+  width: 560px;
+  max-width: 94vw;
+}
+
+/* Space out the form rows inside the freeze modal */
+.freeze-modal .form-group {
+  margin-bottom: 20px;
+}
+
+.freeze-modal .form-group:last-of-type {
+  margin-bottom: 0;
+}
+
+/* Member summary card — matches .member-form-card conventions */
+.freeze-member-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+
+/* Avatar — matches .member-table-avatar conventions (surface bg + accent initials) */
+.freeze-member-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.freeze-member-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.freeze-member-avatar span {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.freeze-member-details h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.freeze-member-details p {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+/* Freeze details summary shown in the unfreeze confirm modal */
+.freeze-details {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 14px;
+  margin-bottom: 16px;
+}
+
+.freeze-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.freeze-detail-row:last-child {
+  border-bottom: none;
+}
+
+.freeze-detail-row span {
+  color: var(--text-muted);
+}
+
+.freeze-detail-row strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+
+.freeze-detail-attachment {
+  max-width: 140px;
+  max-height: 90px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+
+.freeze-reasons {
+  display: flex;
+  gap: 10px;
+}
+
+.freeze-reason-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  /* Buttons don't inherit color by default — force the app text color so the
+     reason labels render white in dark mode (not the OS buttontext black). */
+  color: var(--text);
+}
+
+.freeze-reason-btn:hover {
+  border-color: var(--text-muted);
+  background: rgba(198, 255, 61, 0.06);
+}
+
+.freeze-reason-btn.active {
+  border-color: var(--accent);
+  background: rgba(198, 255, 61, 0.08);
+}
+
+.freeze-reason-icon {
+  font-size: 24px;
+}
+
+.freeze-reason-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.freeze-attachment {
+  margin-top: 4px;
+}
+
+.freeze-attachment-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px;
+  background: var(--surface-2);
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  text-align: center;
+}
+
+.freeze-attachment-upload:hover {
+  border-color: var(--accent);
+}
+
+.freeze-attachment-upload .upload-icon {
+  font-size: 28px;
+}
+
+.freeze-attachment-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.freeze-attachment-preview img {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.freeze-duration {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.freeze-duration .input {
+  width: 120px;
+}
+
+.freeze-duration-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Info summary — matches the app's summary-box conventions (e.g. .newplan-payment-summary) */
+.freeze-info-box {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.freeze-info-box p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.freeze-info-box strong {
+  color: var(--text);
+}
+
+/* Error text inside the freeze modal */
+.freeze-modal .error-message {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: rgba(255, 92, 92, 0.08);
+  border: 1px solid rgba(255, 92, 92, 0.25);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Frozen badge in member table */
+.frozen-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: rgba(77, 168, 255, 0.15);
+  color: var(--info);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Freeze button in member actions */
+.btn-freeze {
+  background: rgba(77, 168, 255, 0.1);
+  color: var(--info);
+  border: 1px solid rgba(77, 168, 255, 0.3);
+}
+
+.btn-freeze:hover {
+  background: rgba(77, 168, 255, 0.2);
+}
+
+.btn-unfreeze {
+  background: rgba(198, 255, 61, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(198, 255, 61, 0.3);
+}
+
+.btn-unfreeze:hover {
+  background: rgba(198, 255, 61, 0.2);
 }
 

@@ -96,6 +96,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   const [scannerStatus, setScannerStatus] = useState<FingerprintStatus | null>(null)
   const [smtpProvider, setSmtpProvider] = useState('')
   const [smtpTestResult, setSmtpTestResult] = useState<BannerState>({ type: 'none' })
+  const [smtpPassWarning, setSmtpPassWarning] = useState('')
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
@@ -136,6 +137,22 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         else if (data.smtpHost === 'smtp.office365.com') setSmtpProvider('smtp.office365.com')
         else if (data.smtpHost === 'smtp.mail.yahoo.com') setSmtpProvider('smtp.mail.yahoo.com')
         else setSmtpProvider('')
+      }
+
+      // Warn when a stored SMTP password exists but can't be decrypted on this
+      // machine (e.g. restored from a backup made elsewhere) — this is what
+      // causes the confusing "Missing credentials for PLAIN" error on send.
+      if (data.smtpHost || data.smtpUser) {
+        try {
+          const status = await window.electronAPI.getSecretStatus('smtpPass')
+          if (status.stored && !status.decrypted) {
+            setSmtpPassWarning('The saved SMTP password could not be decrypted on this machine. Re-enter your password below and Save.')
+          } else {
+            setSmtpPassWarning('')
+          }
+        } catch {
+          /* ignore */
+        }
       }
       if (data.smtpPort) setSettings(prev => ({ ...prev, smtpPort: data.smtpPort }))
       if (data.smtpUser) setSettings(prev => ({ ...prev, smtpUser: data.smtpUser }))
@@ -215,6 +232,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         waiverTemplates: JSON.stringify(waiverTemplates),
       })
       setSaved(true)
+      // If a valid password was just saved, clear the undecryptable warning
+      if (settings.smtpPass) setSmtpPassWarning('')
       notifyDataChanged()
       // Broadcast the new settings (showMemberPhotos, etc.) to the whole app
       await refreshSettings()
@@ -1054,6 +1073,12 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
             </a>
             . After generating, copy the 16-character password and paste it above.
           </div>
+          {smtpPassWarning && (
+            <div className="banner banner-error" style={{ marginTop: 12 }}>
+              <span className="banner-text">⚠️ {smtpPassWarning}</span>
+              <button className="banner-dismiss" onClick={() => setSmtpPassWarning('')}>✕</button>
+            </div>
+          )}
           {smtpTestResult.type !== 'none' && (
             <div className={`banner banner-${smtpTestResult.type}`} style={{ marginTop: 12 }}>
               <span className="banner-text">

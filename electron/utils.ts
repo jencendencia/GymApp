@@ -62,7 +62,7 @@ export function isDateStr(v: unknown): v is string {
   return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d
 }
 
-export const PLAN_TYPES = ['monthly', 'quarterly', 'annual', 'session_pack', 'family'] as const
+export const PLAN_TYPES = ['monthly', 'quarterly', 'annual', 'session_pack', 'family', 'daily'] as const
 export const PAYMENT_TYPES = ['new_plan', 'renewal', 'top_up'] as const
 /** Payment methods that require a transaction reference number (for audit/traceability). */
 export const PAYMENT_METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card'] as const
@@ -70,6 +70,13 @@ export const PAYMENT_STATUSES = ['completed', 'refunded', 'voided'] as const
 export const CHECKIN_STATUSES = ['success', 'failed', 'override'] as const
 export const CHECKIN_METHODS = ['fingerprint', 'manual'] as const
 export const STAFF_ROLES = ['admin', 'staff'] as const
+
+// ── Referral rewards (P2 5.8) ──
+// A member earns 20 points every time a friend they referred joins as a member.
+// Every 100 points can be redeemed at the kiosk for 1 month of free membership.
+export const REFERRAL_POINTS = 20
+export const FREE_MONTH_POINTS = 100
+export const FREE_MONTH_DAYS = 30
 
 /** Basic validation for member create/update payloads. Returns an error string or null. */
 export function validateMember(v: Record<string, unknown>): string | null {
@@ -80,6 +87,8 @@ export function validateMember(v: Record<string, unknown>): string | null {
   if (v.height !== undefined && v.height !== null && v.height !== '' && !isNonNegativeNumber(Number(v.height))) return 'Height must be a non-negative number.'
   if (v.weight !== undefined && v.weight !== null && v.weight !== '' && !isNonNegativeNumber(Number(v.weight))) return 'Weight must be a non-negative number.'
   if (v.balance !== undefined && v.balance !== null && !isNonNegativeNumber(Number(v.balance))) return 'Balance must be a non-negative number.'
+  if (v.referrer_id !== undefined && v.referrer_id !== null && v.referrer_id !== ''
+    && Number(v.referrer_id) !== 0 && !isPositiveNumber(Number(v.referrer_id))) return 'Invalid referrer.'
   return null
 }
 
@@ -88,8 +97,21 @@ export function validatePlan(v: Record<string, unknown>): string | null {
   if (!isNonEmptyString(v.name)) return 'Plan name is required.'
   if (!PLAN_TYPES.includes(v.type as any)) return 'Invalid plan type.'
   if (!isNonNegativeNumber(Number(v.price))) return 'Price must be a non-negative number.'
-  if (v.duration_days !== undefined && v.duration_days !== null && v.duration_days !== '' && !isPositiveNumber(Number(v.duration_days))) return 'Duration must be a positive number.'
-  if (v.sessions !== undefined && v.sessions !== null && v.sessions !== '' && !isPositiveNumber(Number(v.sessions))) return 'Sessions must be a positive number.'
+  // Sessions only apply to per-session plans, duration only to time-based plans.
+  // This makes a monthly plan with 0 sessions (the form default) valid, while a
+  // session pack with 0 sessions is still rejected. A session pack may also have
+  // no fixed duration (0 days = no expiry).
+  if (v.type === 'session_pack') {
+    if (v.sessions !== undefined && v.sessions !== null && v.sessions !== '' && !isPositiveNumber(Number(v.sessions))) {
+      return 'Sessions must be a positive number.'
+    }
+    // Session packs may have no fixed duration (0 = no expiry), but never negative.
+    if (v.duration_days !== undefined && v.duration_days !== null && v.duration_days !== '' && !isNonNegativeNumber(Number(v.duration_days))) {
+      return 'Duration must be a non-negative number.'
+    }
+  } else if (v.duration_days !== undefined && v.duration_days !== null && v.duration_days !== '' && !isPositiveNumber(Number(v.duration_days))) {
+    return 'Duration must be a positive number.'
+  }
   return null
 }
 

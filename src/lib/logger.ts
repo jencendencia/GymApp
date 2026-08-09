@@ -112,6 +112,25 @@ export const log = {
     })
   },
 
+  // ── Referral rewards (P2 5.8) ──
+  referralReward(referrerId: number, referrerName: string, referredName: string, points: number) {
+    return this.action({
+      action: 'referral_reward',
+      entity_type: 'member',
+      entity_id: referrerId,
+      details: JSON.stringify({ member_name: referrerName, referred: referredName, points }),
+    })
+  },
+
+  redeemFreeMonth(memberId: number, memberName: string, points: number, planEnd: string) {
+    return this.action({
+      action: 'redeem_free_month',
+      entity_type: 'member',
+      entity_id: memberId,
+      details: JSON.stringify({ member_name: memberName, points, plan_end: planEnd }),
+    })
+  },
+
   // ── Coaches ──
   createCoach(coachId: number, name: string) {
     return this.action({

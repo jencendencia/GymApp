@@ -946,3 +946,7 @@
     overflow-x: auto;
   }
 }
+
+/* Coach report data is now embedded in the Daily/Monthly reports — the
+   former standalone Coach report page (and its own PDF/XLS/Email exports)
+   was removed. Its styles no longer exist. */

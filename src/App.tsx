@@ -232,7 +232,7 @@ function App() {
       case 'activitylog':
         return <ActivityLog />
       case 'reports':
-        return <Reports appName={appName} />
+        return <Reports appName={appName} currentUser={loggedInUser} />
       case 'users':
         return <Users />
       case 'settings':

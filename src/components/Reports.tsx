@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './Reports.css'
-import { DailyReport, MonthlyReport, Member } from '../types/electron'
+import { DailyReport, MonthlyReport, Member, StaffUser, ReportCoachSummary } from '../types/electron'
 import { todayLocal, todayLocalOf } from '../lib/dates'
 import { getCurrencySymbol } from '../lib/format'
 
@@ -14,12 +14,18 @@ type ReportView = 'daily' | 'monthly'
 
 interface ReportsProps {
   appName?: string
+  currentUser?: StaffUser | null
 }
 
-function Reports({ appName = 'REPCHECK' }: ReportsProps) {
+function Reports({ appName = 'REPCHECK', currentUser }: ReportsProps) {
   // Sanitized filename prefix derived from the app name
   const filePrefix = appName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'repcheck'
   const [view, setView] = useState<ReportView>('daily')
+
+  // Who generated the report (shown in the footer of every export)
+  const generatedBy = currentUser
+    ? `${currentUser.role === 'admin' ? 'Admin' : 'Staff'} · ${currentUser.display_name || currentUser.username}`
+    : 'System'
 
   const switchView = (v: ReportView) => {
     setShowDatePicker(false)
@@ -212,6 +218,56 @@ const [reminderState, setReminderState] = useState<{ sending: boolean; result: s
     )
   }
 
+  // ── Coach Report section (embedded in daily/monthly reports) ──
+  // Shows a per-coach summary table: members, active members, period revenue
+  // and all-time fee collections. Replaces the former separate Coach tab.
+  const CoachReportSection = ({ coaches, periodLabel }: { coaches: ReportCoachSummary[]; periodLabel: string }) => {
+    if (!coaches || coaches.length === 0) return null
+    const totalMembers = coaches.reduce((s, c) => s + (c.totalMembers || 0), 0)
+    const totalActive = coaches.reduce((s, c) => s + (c.activeMembers || 0), 0)
+    const totalPeriod = coaches.reduce((s, c) => s + (c.periodCollected || 0), 0)
+    const totalAll = coaches.reduce((s, c) => s + (c.totalCollected || 0), 0)
+    return (
+      <div className="report-table-section">
+        <h3 className="panel-title">Coach Report</h3>
+        <div className="report-table-container">
+          <table className="report-table">
+            <thead>
+              <tr>
+                <th>Coach</th>
+                <th>Specialty</th>
+                <th>Members</th>
+                <th>Active</th>
+                <th>{periodLabel}</th>
+                <th>Total Collected</th>
+              </tr>
+            </thead>
+            <tbody>
+              {coaches.map(c => (
+                <tr key={c.coach_id}>
+                  <td>{c.coach_name}</td>
+                  <td className="td-plan">{c.specialty || '—'}</td>
+                  <td className="mono-text">{c.totalMembers}</td>
+                  <td className="mono-text">{c.activeMembers}</td>
+                  <td className="mono-text td-amount">{fmtCurrency(c.periodCollected)}</td>
+                  <td className="mono-text td-amount">{fmtCurrency(c.totalCollected)}</td>
+                </tr>
+              ))}
+              <tr className="row-total">
+                <td><strong>Total</strong></td>
+                <td></td>
+                <td className="mono-text">{totalMembers}</td>
+                <td className="mono-text">{totalActive}</td>
+                <td className="mono-text td-amount">{fmtCurrency(totalPeriod)}</td>
+                <td className="mono-text td-amount">{fmtCurrency(totalAll)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
+
   // ── Styled Excel Export (.xls with HTML formatting) ──
   // Uses HTML table with inline CSS saved as .xls
   // Excel opens HTML .xls files with full styling (colors, fonts, borders)
@@ -304,6 +360,20 @@ const [reminderState, setReminderState] = useState<{ sending: boolean; result: s
       return `<span class="tag ${tagClass}">${label}</span>`
     }
 
+    // ── Helper: Coach Report section HTML (shared by daily + monthly) ──
+    const coachTableHtml = (coaches: ReportCoachSummary[], periodLabel: string) => {
+      if (!coaches || coaches.length === 0) return ''
+      const totalMembers = coaches.reduce((s, c) => s + (c.totalMembers || 0), 0)
+      const totalActive = coaches.reduce((s, c) => s + (c.activeMembers || 0), 0)
+      const totalPeriod = coaches.reduce((s, c) => s + (c.periodCollected || 0), 0)
+      const totalAll = coaches.reduce((s, c) => s + (c.totalCollected || 0), 0)
+      return `<div class="section-title">Coach Report</div>\n${buildTable(
+        ['Coach', 'Specialty', 'Members', 'Active', periodLabel, 'Total Collected'],
+        coaches.map(c => [c.coach_name, c.specialty || '—', String(c.totalMembers), String(c.activeMembers), fmtCurrency(c.periodCollected), fmtCurrency(c.totalCollected)]),
+        ['Total', '', String(totalMembers), String(totalActive), fmtCurrency(totalPeriod), fmtCurrency(totalAll)]
+      )}`
+    }
+
     let html: string
     const daily = dailyReport
     const monthly = monthlyReport
@@ -363,7 +433,9 @@ ${buildTable(
   ['TOTAL', '', '', '', '', '', fmtCurrency(daily.totalRevenue), '']
 )}
 
-<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+${coachTableHtml(daily.coaches, 'Collected Today')}
+
+<div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
     } else if (view === 'monthly' && monthly) {
       html = `<!DOCTYPE html>
@@ -417,7 +489,9 @@ ${buildTable(
 <tr><td><strong>Active Member Count</strong></td><td>${monthly.activeMemberCount}</td></tr>
 </table>
 
-<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+${coachTableHtml(monthly.coaches, 'Collected This Month')}
+
+<div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
     } else {
       return
@@ -607,6 +681,29 @@ ${buildTable(
         </div>`
       : ''
 
+    // ── Coach Report section (embedded, daily + monthly) ──
+    const coachSectionPdf = (() => {
+      const coaches = isDaily ? dr.coaches : mr.coaches
+      if (!coaches || coaches.length === 0) return ''
+      const totalMembers = coaches.reduce((s, c) => s + (c.totalMembers || 0), 0)
+      const totalActive = coaches.reduce((s, c) => s + (c.activeMembers || 0), 0)
+      const totalPeriod = coaches.reduce((s, c) => s + (c.periodCollected || 0), 0)
+      const totalAll = coaches.reduce((s, c) => s + (c.totalCollected || 0), 0)
+      const rows = coaches.map(c =>
+        `<tr><td>${c.coach_name}</td><td>${esc(c.specialty || '—')}</td><td class="mono">${c.totalMembers}</td><td class="mono">${c.activeMembers}</td><td class="mono amt">${fmtCurrency(c.periodCollected)}</td><td class="mono amt">${fmtCurrency(c.totalCollected)}</td></tr>`
+      ).join('')
+      return `<div class="section">
+          <h2 class="section-title">Coach Report</h2>
+          <table class="data-table">
+            <thead><tr><th>Coach</th><th>Specialty</th><th>Members</th><th>Active</th><th class="amt">${isDaily ? 'Collected Today' : 'Collected This Month'}</th><th class="amt">Total Collected</th></tr></thead>
+            <tbody>
+              ${rows}
+              <tr><td><strong>Total</strong></td><td></td><td class="mono"><strong>${totalMembers}</strong></td><td class="mono"><strong>${totalActive}</strong></td><td class="mono amt"><strong>${fmtCurrency(totalPeriod)}</strong></td><td class="mono amt"><strong>${fmtCurrency(totalAll)}</strong></td></tr>
+            </tbody>
+          </table>
+        </div>`
+    })()
+
     // ── Monthly summary meta ──
     const monthlyMeta = !isDaily
       ? `<div class="section">
@@ -787,8 +884,9 @@ ${buildTable(
   ${outstandingSection}
   ${monthlyOutstanding}
   ${transactionTable}
+  ${coachSectionPdf}
 
-  <div class="footer">${esc(appName)} — ${title}</div>
+  <div class="footer">${esc(appName)} — ${title} — Generated by ${esc(generatedBy)}</div>
 </body>
 </html>`
 
@@ -1203,6 +1301,11 @@ ${buildTable(
               </div>
             )}
 
+            {/* ── Coach Report section (monthly) ── */}
+            {view === 'monthly' && monthlyReport && (
+              <CoachReportSection coaches={monthlyReport.coaches} periodLabel="Collected This Month" />
+            )}
+
             {/* ── Outstanding Balances Panel (daily) ── */}
             {view === 'daily' && dailyReport && dailyReport.outstanding.length > 0 && (
               <div className="outstanding-section">
@@ -1223,6 +1326,11 @@ ${buildTable(
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* ── Coach Report section (daily) ── */}
+            {view === 'daily' && dailyReport && (
+              <CoachReportSection coaches={dailyReport.coaches} periodLabel="Collected Today" />
             )}
 
             {/* ── Itemized table (daily only) ── */}
@@ -1410,6 +1518,20 @@ ${buildTable(
                       return `<span class="tag ${tagClass}">${label}</span>`
                     }
 
+                    // ── Helper: Coach Report section HTML (shared by daily + monthly) ──
+                    const coachTableHtml = (coaches: ReportCoachSummary[], periodLabel: string) => {
+                      if (!coaches || coaches.length === 0) return ''
+                      const totalMembers = coaches.reduce((s, c) => s + (c.totalMembers || 0), 0)
+                      const totalActive = coaches.reduce((s, c) => s + (c.activeMembers || 0), 0)
+                      const totalPeriod = coaches.reduce((s, c) => s + (c.periodCollected || 0), 0)
+                      const totalAll = coaches.reduce((s, c) => s + (c.totalCollected || 0), 0)
+                      return `<div class="section-title">Coach Report</div>\n${buildTable(
+                        ['Coach', 'Specialty', 'Members', 'Active', periodLabel, 'Total Collected'],
+                        coaches.map(c => [c.coach_name, c.specialty || '—', String(c.totalMembers), String(c.activeMembers), fmtCurrency(c.periodCollected), fmtCurrency(c.totalCollected)]),
+                        ['Total', '', String(totalMembers), String(totalActive), fmtCurrency(totalPeriod), fmtCurrency(totalAll)]
+                      )}`
+                    }
+
                     let html: string
                     const emailFilename = view === 'daily' && dailyReport
                       ? `${filePrefix}-daily-${dailyReport.date}.xls`
@@ -1443,7 +1565,8 @@ ${buildTable(['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Status', 'Amount
     fmtCurrency(t.amount), fmtTime(t.created_at),
   ]
 }), ['TOTAL', '', '', '', '', '', fmtCurrency(daily.totalRevenue), ''])}
-<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+${coachTableHtml(daily.coaches, 'Collected Today')}
+<div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
                     } else if (view === 'monthly' && monthlyReport) {
                       const monthly = monthlyReport
@@ -1468,7 +1591,8 @@ ${monthly.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c
 <tr><td><strong>Payment Methods</strong></td><td>${monthly.byMethod.map(m => `${m.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${fmtCurrency(m.total)}`).join('; ')}</td></tr>
 <tr><td><strong>Total Outstanding</strong></td><td class="danger">${fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))}</td></tr>
 </table>
-<div class="footer">Report generated ${now} — ${esc(appName)}</div>
+${coachTableHtml(monthly.coaches, 'Collected This Month')}
+<div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
                     } else {
                       setEmailSending(false)

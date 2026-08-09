@@ -13,10 +13,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createMember: (member: any) => ipcRenderer.invoke('create-member', member),
   updateMember: (id: number, member: any) => ipcRenderer.invoke('update-member', id, member),
   deleteMember: (id: number) => ipcRenderer.invoke('delete-member', id),
+  // P3: Plan freeze (admin-only)
+  freezeMember: (id: number, freezeData: { reason: string; custom_reason?: string; days: number; attachment?: string }) =>
+    ipcRenderer.invoke('freeze-member', id, freezeData),
+  unfreezeMember: (id: number) => ipcRenderer.invoke('unfreeze-member', id),
+  autoResumeFrozenPlans: () => ipcRenderer.invoke('auto-resume-frozen-plans'),
   searchMembers: (query: string) => ipcRenderer.invoke('search-members', query),
   getMembersPage: (opts?: { offset?: number; limit?: number; search?: string }) => ipcRenderer.invoke('get-members-page', opts),
   checkMemberIdExists: (memberId: string) => ipcRenderer.invoke('check-member-id-exists', memberId),
   getLastMemberId: () => ipcRenderer.invoke('get-last-member-id'),
+
+  // Referral rewards (P2 5.8)
+  redeemFreeMonth: (memberId: number) => ipcRenderer.invoke('redeem-free-month', memberId),
 
   // Plans
   getPlans: () => ipcRenderer.invoke('get-plans'),
@@ -125,6 +133,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
+  getSecretStatus: (key: string) => ipcRenderer.invoke('get-secret-status', key),
   saveSetting: (key: string, value: string) => ipcRenderer.invoke('save-setting', key, value),
   saveSettings: (settings: Record<string, string>) => ipcRenderer.invoke('save-settings', settings),
 

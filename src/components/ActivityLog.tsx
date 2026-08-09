@@ -27,6 +27,11 @@ const ACTION_META: Record<string, { label: string; icon: string; category: Actio
   delete_member: { label: 'Member Deleted', icon: '🗑️', category: 'member', verb: 'deleted member' },
   register_fingerprint: { label: 'Fingerprint Registered', icon: '🖐️', category: 'member', verb: 'registered fingerprint for' },
   assign_plan: { label: 'Plan Assigned', icon: '📋', category: 'member', verb: 'assigned plan to' },
+  freeze_plan: { label: 'Plan Frozen', icon: '❄️', category: 'member', verb: 'froze plan for' },
+  unfreeze_plan: { label: 'Plan Unfrozen', icon: '🔓', category: 'member', verb: 'unfroze plan for' },
+  auto_unfreeze: { label: 'Auto Unfreeze', icon: '🔄', category: 'member', verb: 'auto-unfroze plan for' },
+  referral_reward: { label: 'Referral Reward', icon: '🎁', category: 'member', verb: 'awarded referral points to' },
+  redeem_free_month: { label: 'Free Month Redeemed', icon: '🎉', category: 'member', verb: 'redeemed points for a free month for' },
   create_coach: { label: 'Coach Created', icon: '➕', category: 'coach', verb: 'created coach' },
   update_coach: { label: 'Coach Updated', icon: '✏️', category: 'coach', verb: 'updated coach' },
   delete_coach: { label: 'Coach Deleted', icon: '🗑️', category: 'coach', verb: 'deleted coach' },
@@ -185,6 +190,12 @@ function ActivityLog() {
         return details.member_name || ''
       case 'assign_plan':
         return `${details.member_name || ''} → ${details.plan_name || ''}`
+      case 'freeze_plan':
+        return `${details.member_name || ''} · ${details.reason || ''} · ${details.days || 0} days`
+      case 'unfreeze_plan':
+        return `${details.member_name || ''}`
+      case 'auto_unfreeze':
+        return `${details.member_name || ''}`
       case 'create_coach':
       case 'update_coach':
       case 'delete_coach':
@@ -205,6 +216,10 @@ function ActivityLog() {
             : details.staff_name || ''
       case 'register_staff_fingerprint':
         return details.staff_name || ''
+      case 'referral_reward':
+        return `${details.member_name || ''} ← referred ${details.referred || ''} (+${details.points || 0} pts)`
+      case 'redeem_free_month':
+        return `${details.member_name || ''} · −${details.points || 0} pts → free month (${details.plan_end || ''})`
       default:
         return JSON.stringify(details)
     }

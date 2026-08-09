@@ -20,6 +20,7 @@
   /* Centered via auto margins: perfectly centered when the content fits, and
      scrolls cleanly from the top when it overflows — no center/scroll jiggle. */
   margin: auto;
+  /* When a full-screen profile is shown, remove auto margins so it fills edge-to-edge */
 }
 
 .kiosk-screen {
@@ -413,13 +414,288 @@
   max-width: 500px;
 }
 
+/* ── Two-panel check-in profile (P2 5.8): photo on the left, details right.
+   Fills the ENTIRE kiosk screen — the profile is full-width/full-height and the
+   two panels stretch edge-to-edge (the banner + scan indicator sit above the
+   grid, which absorbs all remaining height). ── */
+.kiosk-profile-split {
+  /* Fill the ENTIRE kiosk screen — use fixed positioning to completely bypass
+     any flex/grid centering from parent containers (.kiosk-screen, .kiosk-screens, .kiosk). */
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+  z-index: 100;
+}
+
+.kiosk-profile-split .profile-banner {
+  border-radius: 0;
+  margin-bottom: 0;
+  flex-shrink: 0;
+  /* Fixed position to span the full viewport width regardless of parent layout */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100vw;
+  z-index: 101;
+}
+
+.kiosk-split-grid {
+  display: grid;
+  /* Exact 50/50 split: the left panel spans from the left edge to the middle
+     of the screen, the right panel from the middle to the right edge (the
+     gap sits centered between them). */
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  /* Force full viewport width to bypass any parent flex sizing issues */
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  /* Account for fixed banner (48px) and scan indicator (36px) */
+  margin-top: 84px;
+}
+
+/* Left panel — the member's photo fills the ENTIRE panel (name + ID live in
+   the right panel; the status badge sits beside the name there too). */
+.kiosk-photo-panel {
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  /* Explicitly place in first grid column */
+  grid-column: 1;
+  margin: 12px;
+  margin-right: 6px;
+}
+
+.kiosk-photo-panel.expired {
+  border-color: var(--warn);
+}
+
+.kiosk-photo-frame {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+}
+
+.kiosk-photo-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.kiosk-photo-fallback {
+  font-family: var(--font-display);
+  font-size: 96px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.kiosk-photo-frame.expired .kiosk-photo-fallback {
+  color: var(--warn);
+}
+
+/* Right panel — member details */
+.kiosk-details-panel {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  /* Explicitly place in second grid column */
+  grid-column: 2;
+  margin: 12px;
+  margin-left: 6px;
+}
+
+.kiosk-details-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Name + status badge on one row, member ID below */
+.kiosk-details-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.kiosk-details-panel .profile-metadata {
+  margin-bottom: 0;
+}
+
+.kiosk-details-panel .expiry-section {
+  margin-bottom: 0;
+}
+
+/* Coach days remaining (shown when the member has coaching) */
+.metadata-value.coach-days {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.metadata-value.coach-days.low {
+  color: var(--warn);
+}
+
+/* Referral reward points (P2 5.8) */
+.metadata-value.kiosk-points {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.metadata-value.kiosk-points.redeemable {
+  color: var(--accent);
+}
+
+/* Redeem free-month button */
+.kiosk-redeem-btn {
+  width: 100%;
+  font-size: 15px;
+  padding: 14px 20px;
+  animation: kiosk-redeem-glow 2s ease-in-out infinite;
+}
+
+@keyframes kiosk-redeem-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(198, 255, 61, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(198, 255, 61, 0); }
+}
+
+/* Redeem modal — points hero */
+.kiosk-redeem-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px;
+  margin-bottom: 12px;
+  border-radius: 14px;
+  background: rgba(198, 255, 61, 0.08);
+  border: 1px solid rgba(198, 255, 61, 0.25);
+}
+
+.kiosk-redeem-points {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.kiosk-redeem-points-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Larger touch-friendly sizing in kiosk-window mode (capped with vh so the
+   fullscreen two-panel profile always fits on one non-scrollable screen) */
+.app-kiosk-mode .kiosk-profile-split {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  padding: 0;
+}
+
+.app-kiosk-mode .kiosk-split-grid {
+  gap: 0;
+  width: 100vw;
+}
+
+.app-kiosk-mode .kiosk-photo-panel {
+  padding: 0;
+  margin: 16px;
+  margin-right: 8px;
+}
+
+.app-kiosk-mode .kiosk-details-panel {
+  margin: 16px;
+  margin-left: 8px;
+}
+
+.app-kiosk-mode .kiosk-photo-fallback {
+  font-size: min(220px, 26vh);
+}
+
+.app-kiosk-mode .kiosk-details-title-row {
+  gap: min(16px, 1.9vh);
+}
+
+.app-kiosk-mode .kiosk-details-title-row .status-badge {
+  font-size: min(17px, 2vh);
+  padding: min(8px, 1vh) min(16px, 1.9vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel {
+  padding: min(24px, 2.8vh) min(28px, 3.2vh);
+  gap: min(20px, 2.3vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .profile-name {
+  font-size: min(44px, 5vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .profile-id {
+  font-size: min(17px, 2vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .profile-metadata {
+  gap: min(28px, 3.2vh) min(24px, 2.8vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .metadata-label {
+  font-size: min(15px, 1.8vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .metadata-value {
+  font-size: min(22px, 2.5vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .expiry-label,
+.app-kiosk-mode .kiosk-details-panel .expiry-status {
+  font-size: min(16px, 1.9vh);
+}
+
+.app-kiosk-mode .kiosk-details-panel .expiry-date {
+  font-size: min(15px, 1.8vh);
+}
+
+.app-kiosk-mode .kiosk-redeem-btn {
+  font-size: min(19px, 2.3vh);
+  padding: min(17px, 2.1vh) min(24px, 2.8vh);
+}
+
 .profile-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px;
-  border-radius: 12px 12px 0 0;
+  padding: 14px 20px;
+  border-radius: 0;
   font-weight: 500;
   font-size: 14px;
 }
@@ -433,14 +709,14 @@
 .profile-banner.active {
   background: rgba(198, 255, 61, 0.15);
   color: var(--accent);
-  border: 1px solid var(--accent);
+  border: none;
   border-bottom: none;
 }
 
 .profile-banner.expired {
   background: rgba(255, 176, 32, 0.15);
   color: var(--warn);
-  border: 1px solid var(--warn);
+  border: none;
   border-bottom: none;
 }
 
@@ -538,10 +814,10 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
+  padding: 0;
+  border-top: none;
+  border-bottom: none;
+  margin-bottom: 0;
 }
 
 .metadata-item {
@@ -577,7 +853,7 @@
 }
 
 .expiry-section {
-  margin-bottom: 24px;
+  margin-bottom: 0;
 }
 
 .expiry-header {
@@ -621,6 +897,11 @@
   background: var(--danger);
 }
 
+/* Coach days progress bar — blue to differentiate from plan status (green) */
+.expiry-fill.coach {
+  background: var(--info, #4da8ff);
+}
+
 .expiry-status {
   font-size: 12px;
   color: var(--accent);
@@ -647,20 +928,26 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin-top: 10px;
-  padding: 6px 14px;
+  margin-top: 0;
+  padding: 8px 14px;
   font-size: 13px;
   color: var(--text-muted);
   background: var(--surface-2, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border, #2a2d35);
-  border-radius: 999px;
-  width: fit-content;
-  margin-left: auto;
-  margin-right: auto;
+  border: none;
+  border-bottom: 1px solid var(--border, #2a2d35);
+  border-radius: 0;
+  /* Fixed position to span the full viewport width */
+  position: fixed;
+  top: 48px; /* Below the banner */
+  left: 0;
+  right: 0;
+  width: 100vw;
+  z-index: 101;
+  flex-shrink: 0;
 }
 
 .kiosk-profile .kiosk-scan-next {
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 /* No Match State */

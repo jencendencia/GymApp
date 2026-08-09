@@ -75,6 +75,14 @@ describe('validateMember', () => {
     expect(validateMember({ name: 'Joel', balance: -5 })).toBe('Balance must be a non-negative number.')
     expect(validateMember({ name: 'Joel', plan_end: 'garbage' })).toBe('Plan end must be a valid date.')
   })
+
+  it('validates the referral referrer_id (P2 5.8)', () => {
+    expect(validateMember({ name: 'Joel', referrer_id: 5 })).toBeNull()
+    expect(validateMember({ name: 'Joel', referrer_id: 0 })).toBeNull()
+    expect(validateMember({ name: 'Joel', referrer_id: undefined })).toBeNull()
+    expect(validateMember({ name: 'Joel', referrer_id: -3 })).toBe('Invalid referrer.')
+    expect(validateMember({ name: 'Joel', referrer_id: 'x' })).toBe('Invalid referrer.')
+  })
 })
 
 describe('validatePlan / validatePayment / validateCoach', () => {
@@ -83,6 +91,20 @@ describe('validatePlan / validatePayment / validateCoach', () => {
     expect(validatePlan({ name: 'M', type: 'monthly', price: 100 })).toBeNull()
     expect(validatePlan({ name: 'M', type: 'monthly', price: -1 })).toBe('Price must be a non-negative number.')
     expect(validatePlan({ name: 'M', type: 'weird', price: 100 })).toBe('Invalid plan type.')
+  })
+
+  it('validatePlan is type-aware about sessions and duration', () => {
+    // Time-based plans default to 0 sessions — must be accepted (the create-plan bug fix).
+    expect(validatePlan({ name: 'M', type: 'monthly', price: 100, duration_days: 30, sessions: 0 })).toBeNull()
+    expect(validatePlan({ name: 'M', type: 'family', price: 100, duration_days: 30, sessions: 0 })).toBeNull()
+    // Session packs require positive sessions.
+    expect(validatePlan({ name: 'M', type: 'session_pack', price: 100, sessions: 0 })).toBe('Sessions must be a positive number.')
+    expect(validatePlan({ name: 'M', type: 'session_pack', price: 100, sessions: 10 })).toBeNull()
+    // Time-based plans require a positive duration.
+    expect(validatePlan({ name: 'M', type: 'monthly', price: 100, duration_days: 0, sessions: 0 })).toBe('Duration must be a positive number.')
+    // A session pack may have no fixed duration, but never a negative one.
+    expect(validatePlan({ name: 'M', type: 'session_pack', price: 100, duration_days: 0, sessions: 10 })).toBeNull()
+    expect(validatePlan({ name: 'M', type: 'session_pack', price: 100, duration_days: -5, sessions: 10 })).toBe('Duration must be a non-negative number.')
   })
 
   it('validatePayment', () => {

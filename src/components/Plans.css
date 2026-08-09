@@ -79,6 +79,11 @@
   color: var(--danger);
 }
 
+.plan-type-badge.daily {
+  background: rgba(77, 168, 255, 0.15);
+  color: var(--info);
+}
+
 .plan-name {
   font-size: 20px;
   margin: 0 0 8px 0;

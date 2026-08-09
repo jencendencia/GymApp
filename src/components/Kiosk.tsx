@@ -83,6 +83,10 @@ function Kiosk({ onRefresh }: KioskProps) {
   const [renewAmount, setRenewAmount] = useState(0)
   const [renewing, setRenewing] = useState(false)
   const [renewError, setRenewError] = useState('')
+  // P2 5.8: free-month redemption (100 reward points) state
+  const [showRedeemModal, setShowRedeemModal] = useState(false)
+  const [redeeming, setRedeeming] = useState(false)
+  const [redeemError, setRedeemError] = useState('')
   // Kiosk settings wired from Settings page
   const [kioskSettings, setKioskSettings] = useState({
     scannerEnabled: true,
@@ -325,9 +329,11 @@ function Kiosk({ onRefresh }: KioskProps) {
     return () => clearTimeout(t)
   }, [state, blockedRescanning, kioskSettings.scannerEnabled])
 
-  // Countdown timer for match-found auto-close
+  // Countdown timer for match-found auto-close. Paused while the redeem modal
+  // is open so a member has time to redeem their reward (P2 5.8) — the modal
+  // closing re-arms a fresh 6s countdown.
   useEffect(() => {
-    if (state === 'match-found') {
+    if (state === 'match-found' && !showRedeemModal) {
       setCountdown(AUTO_CLOSE_SECONDS)
       countdownTimer.current = setInterval(() => {
         setCountdown(prev => {
@@ -348,7 +354,7 @@ function Kiosk({ onRefresh }: KioskProps) {
         countdownTimer.current = null
       }
     }
-  }, [state === 'match-found', matchKey])
+  }, [state === 'match-found', matchKey, showRedeemModal])
 
   // A staff/admin fingerprint was matched at the kiosk:
   //  - Blocked check-in context → staff authorizes the override immediately
@@ -769,6 +775,9 @@ function Kiosk({ onRefresh }: KioskProps) {
     setShowMemberIdInput(false)
     setMemberIdInput('')
     setMemberIdError('')
+    setShowRedeemModal(false)
+    setRedeeming(false)
+    setRedeemError('')
     setCountdown(AUTO_CLOSE_SECONDS)
   }, [])
 
@@ -1003,6 +1012,39 @@ function Kiosk({ onRefresh }: KioskProps) {
     }
   }
 
+  // P2 5.8: redeem 100 reward points for 1 month of free membership.
+  // The backend deducts the points and extends plan_end by 30 days; we then
+  // re-fetch the member so the on-screen points + plan status update live.
+  const handleRedeemFreeMonth = async () => {
+    if (!matchedMember) return
+    setRedeeming(true)
+    setRedeemError('')
+    try {
+      const res = await window.electronAPI.redeemFreeMonth(matchedMember.id)
+      if (!res.success) {
+        setRedeemError(res.message || 'Redemption failed. Please try again.')
+        return
+      }
+      // Close the modal + log BEFORE the refresh so a failed re-fetch can never
+      // report a false error after the redemption already succeeded.
+      setShowRedeemModal(false)
+      playSuccessSound()
+      log.redeemFreeMonth(matchedMember.id, matchedMember.name, 100, res.planEnd || '')
+      onRefresh()
+      // Best-effort refresh of the member so the new points + plan end show live
+      try {
+        const fresh = await window.electronAPI.getMember(matchedMember.id)
+        if (fresh) setMatchedMember(fresh)
+      } catch {
+        // Non-fatal — the screen refreshes from other windows anyway
+      }
+    } catch (error: any) {
+      setRedeemError(error.message || 'Redemption failed. Please try again.')
+    } finally {
+      setRedeeming(false)
+    }
+  }
+
   const handleManualOverride = async () => {
     if (matchedMember) {
       await window.electronAPI.createCheckin({
@@ -1033,6 +1075,9 @@ function Kiosk({ onRefresh }: KioskProps) {
     setShowMemberIdInput(false)
     setMemberIdInput('')
     setMemberIdError('')
+    setShowRedeemModal(false)
+    setRedeeming(false)
+    setRedeemError('')
   }
 
   const toggleManualSearch = () => {
@@ -1095,6 +1140,37 @@ function Kiosk({ onRefresh }: KioskProps) {
       setGuestSubmitting(false)
     }
   }
+
+  // P2 5.8: confirm modal for redeeming 100 reward points → 1 free month
+  const renderRedeemModal = () => matchedMember && (
+    <div className="kiosk-renew-overlay" onClick={() => { if (!redeeming) setShowRedeemModal(false) }}>
+      <div className="kiosk-renew-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="kiosk-renew-header">
+          <h2 className="display-text">🎁 Redeem Free Month</h2>
+          <button className="btn-icon" onClick={() => setShowRedeemModal(false)} disabled={redeeming}>✕</button>
+        </div>
+        <div className="kiosk-renew-body">
+          <div className="kiosk-redeem-hero">
+            <span className="kiosk-redeem-points">⭐ {matchedMember.points || 0} pts</span>
+            <span className="kiosk-redeem-points-label">Reward points available</span>
+          </div>
+          <p className="text-muted" style={{ margin: 0 }}>
+            Redeem <strong>100 points</strong> for <strong>1 month of free membership</strong>.
+            This adds 30 days to {matchedMember.name}'s plan.
+          </p>
+          {redeemError && <div className="kiosk-renew-error">{redeemError}</div>}
+        </div>
+        <div className="kiosk-renew-footer">
+          <button className="btn btn-secondary" onClick={() => setShowRedeemModal(false)} disabled={redeeming}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleRedeemFreeMonth} disabled={redeeming}>
+            {redeeming ? 'Redeeming...' : 'Redeem 100 pts'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 
   const renderGuestModal = () => (
     <div className="kiosk-renew-overlay" onClick={() => { if (!guestSubmitting) setShowGuestModal(false) }}>
@@ -1323,8 +1399,26 @@ function Kiosk({ onRefresh }: KioskProps) {
       </div>
   )
 
-  const renderMatchFound = () => matchedMember && (
-    <div className="kiosk-profile">
+  const renderMatchFound = () => {
+    if (!matchedMember) return null
+    // Remaining coach days (only meaningful when the member has coaching)
+    const coachDays = matchedMember.coaching_end
+      ? Math.ceil((new Date(matchedMember.coaching_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      : null
+    // Coach days percentage (for progress bar)
+    const coachTotal = matchedMember.coaching_start && matchedMember.coaching_end
+      ? new Date(matchedMember.coaching_end).getTime() - new Date(matchedMember.coaching_start).getTime()
+      : 0
+    const coachRemaining = matchedMember.coaching_end ? new Date(matchedMember.coaching_end).getTime() - Date.now() : 0
+    const coachPct = coachTotal > 0 ? Math.max(2, Math.min(100, (coachRemaining / coachTotal) * 100)) : 65
+    // Expiry bar: remaining / total plan duration (fallback 65% when unknown)
+    const planTotal = matchedMember.plan_start && matchedMember.plan_end
+      ? new Date(matchedMember.plan_end).getTime() - new Date(matchedMember.plan_start).getTime()
+      : 0
+    const planRemaining = matchedMember.plan_end ? new Date(matchedMember.plan_end).getTime() - Date.now() : 0
+    const planPct = planTotal > 0 ? Math.max(2, Math.min(100, (planRemaining / planTotal) * 100)) : 65
+    return (
+    <div className="kiosk-profile kiosk-profile-split">
       <div className="profile-banner active">
         <div className="banner-left">
           <span className="banner-icon">✓</span>
@@ -1353,158 +1447,273 @@ function Kiosk({ onRefresh }: KioskProps) {
         <span className={`kiosk-scan-dot${scanActive ? ' active' : ''}`} />
         <span>{scanActive ? 'Scanning for next member…' : 'Ready for next scan'}</span>
       </div>
-      
-      <div className="profile-card">
-        <div className="profile-header">
-          <div className="profile-avatar">
+
+      {/* Two-panel check-in confirmation: photo left, details right */}
+      <div className="kiosk-split-grid">
+        {/* Left panel — photo only, fills the whole panel */}
+        <div className="kiosk-photo-panel">
+          <div className="kiosk-photo-frame">
             {matchedMember.photo && kioskSettings.showMemberPhotos ? (
-              <img src={matchedMember.photo} alt={matchedMember.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '16px' }} />
+              <img src={matchedMember.photo} alt={matchedMember.name} />
             ) : (
-              matchedMember.name.charAt(0).toUpperCase()
+              <span className="kiosk-photo-fallback">{matchedMember.name.charAt(0).toUpperCase()}</span>
             )}
           </div>
-          <div className="profile-info">
-            <h2 className="display-text profile-name">{matchedMember.name}</h2>
-            <p className="mono-text profile-id">ID: {matchedMember.member_id}</p>
-            <span className={`status-badge ${matchedMember.status}`}>
-              {matchedMember.status}
-            </span>
-          </div>
         </div>
-        
-        <div className="profile-metadata">
-          <div className="metadata-item">
-            <span className="metadata-label">Plan</span>
-            <span className="metadata-value">{matchedMember.plan_name || 'No plan'}</span>
-          </div>
-          {/* Multi-session pack members: show sessions remaining (this check-in already consumed one).
-              1-session "per session" plans are day passes — time-gated, so no session count is shown. */}
-          {matchedMember.plan_type === 'session_pack' && typeof matchedMember.plan_sessions === 'number' && matchedMember.plan_sessions > 1 && (() => {
-            const remaining = Math.max(0, matchedMember.plan_sessions! - (matchedMember.sessions_used || 0) - 1)
-            return (
-              <div className="metadata-item">
-                <span className="metadata-label">Sessions Left</span>
-                <span className={`metadata-value mono-text sessions-left${remaining <= 2 ? ' low' : ''}`}>
-                  {remaining} of {matchedMember.plan_sessions} left
-                </span>
+
+        {/* Right panel — member details */}
+        <div className="kiosk-details-panel">            <div className="kiosk-details-header">
+              <div className="kiosk-details-title-row">
+                <h2 className="display-text profile-name">{matchedMember.name}</h2>
+                {matchedMember.frozen ? (
+                  <span className="status-badge frozen" title={matchedMember.freeze_end ? `Frozen until ${new Date(matchedMember.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                    ❄️ Frozen
+                  </span>
+                ) : (
+                  <span className={`status-badge ${matchedMember.status}`}>{matchedMember.status}</span>
+                )}
               </div>
-            )
-          })()}
-          <div className="metadata-item">
-            <span className="metadata-label">Member Since</span>
-            <span className="metadata-value mono-text">
-              {matchedMember.created_at ? new Date(matchedMember.created_at).toLocaleDateString() : 'N/A'}
+              <p className="mono-text profile-id">ID: {matchedMember.member_id}</p>
+            </div>
+
+          <div className="profile-metadata">
+            <div className="metadata-item">
+              <span className="metadata-label">Plan</span>
+              <span className="metadata-value">{matchedMember.plan_name || 'No plan'}</span>
+            </div>
+            {/* Multi-session pack members: show sessions remaining (this check-in already consumed one).
+                1-session "per session" plans are day passes — time-gated, so no session count is shown. */}
+            {matchedMember.plan_type === 'session_pack' && typeof matchedMember.plan_sessions === 'number' && matchedMember.plan_sessions > 1 && (() => {
+              const remaining = Math.max(0, matchedMember.plan_sessions! - (matchedMember.sessions_used || 0) - 1)
+              return (
+                <div className="metadata-item">
+                  <span className="metadata-label">Sessions Left</span>
+                  <span className={`metadata-value mono-text sessions-left${remaining <= 2 ? ' low' : ''}`}>
+                    {remaining} of {matchedMember.plan_sessions} left
+                  </span>
+                </div>
+              )
+            })()}
+            <div className="metadata-item">
+              <span className="metadata-label">Coach</span>
+              <span className="metadata-value">{matchedMember.coach_name || '—'}</span>
+            </div>
+            {/* Remaining coach days when the member availed coaching */}
+            {matchedMember.coach_id && coachDays !== null && (
+              <div className="metadata-item">
+                <span className="metadata-label">Coach Days Left</span>
+                <span className={`metadata-value mono-text coach-days${coachDays >= 0 && coachDays <= 2 ? ' low' : ''}`}>
+                  {coachDays > 0
+                    ? `${coachDays} day${coachDays === 1 ? '' : 's'}`
+                    : coachDays === 0
+                      ? 'Ends today'
+                      : `Ended ${Math.abs(coachDays)}d ago`}
+                </span>
+                <div className="expiry-bar">
+                  <div
+                    className="expiry-fill coach"
+                    style={{ width: `${coachPct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {/* P2 5.8: referral reward points — visible on every kiosk check-in */}
+            <div className="metadata-item">
+              <span className="metadata-label">Reward Points</span>
+              <span className={`metadata-value mono-text kiosk-points${(matchedMember.points || 0) >= 100 ? ' redeemable' : ''}`}>
+                ⭐ {matchedMember.points || 0} pts
+              </span>
+            </div>
+            <div className="metadata-item">
+              <span className="metadata-label">Member Since</span>
+              <span className="metadata-value mono-text">
+                {matchedMember.created_at ? new Date(matchedMember.created_at).toLocaleDateString() : 'N/A'}
+              </span>
+            </div>
+            <div className="metadata-item">
+              <span className="metadata-label">Balance</span>
+              <span className="metadata-value mono-text">
+                {formatMoney(matchedMember.balance)}
+              </span>
+            </div>
+          </div>
+
+          <div className="expiry-section">
+            <div className="expiry-header">
+              <span className="expiry-label">Plan Status</span>
+              <span className="mono-text expiry-date">
+                {matchedMember.plan_end ? new Date(matchedMember.plan_end).toLocaleDateString() : 'No end date'}
+              </span>
+            </div>
+            <div className="expiry-bar">
+              <div
+                className="expiry-fill active"
+                style={{ width: `${planPct}%` }}
+              />
+            </div>
+            <span className="expiry-status">
+              {matchedMember.plan_end
+                ? (() => {
+                    const days = Math.ceil((new Date(matchedMember.plan_end!).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                    return days > 0
+                      ? `${days} day${days === 1 ? '' : 's'} remaining`
+                      : 'Expiring today'
+                  })()
+                : 'No end date'
+              }
             </span>
           </div>
-          <div className="metadata-item">
-            <span className="metadata-label">Balance</span>
-            <span className="metadata-value mono-text">
-              {formatMoney(matchedMember.balance)}
-            </span>
-          </div>
-        </div>
-        
-        <div className="expiry-section">
-          <div className="expiry-header">
-            <span className="expiry-label">Plan Status</span>
-            <span className="mono-text expiry-date">
-              {matchedMember.plan_end ? new Date(matchedMember.plan_end).toLocaleDateString() : 'No end date'}
-            </span>
-          </div>
-          <div className="expiry-bar">
-            <div 
-              className="expiry-fill active"
-              style={{ width: '65%' }}
-            />
-          </div>
-          <span className="expiry-status">
-            {matchedMember.plan_end
-              ? (() => {
-                  const days = Math.ceil((new Date(matchedMember.plan_end!).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-                  return days > 0
-                    ? `${days} day${days === 1 ? '' : 's'} remaining`
-                    : 'Expiring today'
-                })()
-              : 'No end date'
-            }
-          </span>
+
+          {/* Redeem 100 points for a free month (P2 5.8) */}
+          {(matchedMember.points || 0) >= 100 && (
+            <button className="btn btn-primary kiosk-redeem-btn" onClick={() => setShowRedeemModal(true)}>
+              🎁 Redeem 100 pts — 1 month free
+            </button>
+          )}
         </div>
       </div>
     </div>
-  )
+    )
+  }
 
-  const renderExpired = () => matchedMember && (
-    <div className="kiosk-profile">
+  const renderExpired = () => {
+    if (!matchedMember) return null
+    // Remaining coach days (only meaningful when the member has coaching)
+    const coachDays = matchedMember.coaching_end
+      ? Math.ceil((new Date(matchedMember.coaching_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      : null
+    // Coach days percentage (for progress bar)
+    const coachTotal = matchedMember.coaching_start && matchedMember.coaching_end
+      ? new Date(matchedMember.coaching_end).getTime() - new Date(matchedMember.coaching_start).getTime()
+      : 0
+    const coachRemaining = matchedMember.coaching_end ? new Date(matchedMember.coaching_end).getTime() - Date.now() : 0
+    const coachPct = coachTotal > 0 ? Math.max(2, Math.min(100, (coachRemaining / coachTotal) * 100)) : 65
+    const daysExpired = matchedMember.plan_end
+      ? Math.floor((Date.now() - new Date(matchedMember.plan_end).getTime()) / (1000 * 60 * 60 * 24))
+      : 0
+    return (
+    <div className="kiosk-profile kiosk-profile-split">
       <div className="profile-banner expired">
         <span className="banner-icon">⚠</span>
         <span>Match found — plan is expired</span>
       </div>
-      
-      <div className="profile-card">
-        <div className="profile-header">
-          <div className="profile-avatar">
+
+      {/* Two-panel expired profile: photo left, details right */}
+      <div className="kiosk-split-grid">
+        {/* Left panel — photo only, fills the whole panel */}
+        <div className="kiosk-photo-panel expired">
+          <div className="kiosk-photo-frame expired">
             {matchedMember.photo && kioskSettings.showMemberPhotos ? (
-              <img src={matchedMember.photo} alt={matchedMember.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '16px' }} />
+              <img src={matchedMember.photo} alt={matchedMember.name} />
             ) : (
-              matchedMember.name.charAt(0).toUpperCase()
+              <span className="kiosk-photo-fallback">{matchedMember.name.charAt(0).toUpperCase()}</span>
             )}
           </div>
-          <div className="profile-info">
-            <h2 className="display-text profile-name">{matchedMember.name}</h2>
+        </div>
+
+        {/* Right panel — member details */}
+        <div className="kiosk-details-panel">
+          <div className="kiosk-details-header">
+            <div className="kiosk-details-title-row">
+              <h2 className="display-text profile-name">{matchedMember.name}</h2>
+              {matchedMember.frozen ? (
+                <span className="status-badge frozen" title={matchedMember.freeze_end ? `Frozen until ${new Date(matchedMember.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                  ❄️ Frozen
+                </span>
+              ) : (
+                <span className="status-badge expired">Expired</span>
+              )}
+            </div>
             <p className="mono-text profile-id">ID: {matchedMember.member_id}</p>
-            <span className="status-badge expired">Expired</span>
           </div>
-        </div>
-        
-        <div className="profile-metadata">
-          <div className="metadata-item">
-            <span className="metadata-label">Plan</span>
-            <span className="metadata-value">{matchedMember.plan_name || 'No plan'}</span>
+
+          <div className="profile-metadata">
+            <div className="metadata-item">
+              <span className="metadata-label">Plan</span>
+              <span className="metadata-value">{matchedMember.plan_name || 'No plan'}</span>
+            </div>
+            <div className="metadata-item">
+              <span className="metadata-label">Expiry Date</span>
+              <span className="metadata-value mono-text danger">
+                {matchedMember.plan_end ? new Date(matchedMember.plan_end).toLocaleDateString() : 'N/A'}
+              </span>
+            </div>
+            <div className="metadata-item">
+              <span className="metadata-label">Coach</span>
+              <span className="metadata-value">{matchedMember.coach_name || '—'}</span>
+            </div>
+            {matchedMember.coach_id && coachDays !== null && (
+              <div className="metadata-item">
+                <span className="metadata-label">Coach Days Left</span>
+                <span className={`metadata-value mono-text coach-days${coachDays >= 0 && coachDays <= 2 ? ' low' : ''}`}>
+                  {coachDays > 0
+                    ? `${coachDays} day${coachDays === 1 ? '' : 's'}`
+                    : coachDays === 0
+                      ? 'Ends today'
+                      : `Ended ${Math.abs(coachDays)}d ago`}
+                </span>
+                <div className="expiry-bar">
+                  <div
+                    className="expiry-fill coach"
+                    style={{ width: `${coachPct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {/* P2 5.8: referral reward points — visible on every kiosk check-in */}
+            <div className="metadata-item">
+              <span className="metadata-label">Reward Points</span>
+              <span className={`metadata-value mono-text kiosk-points${(matchedMember.points || 0) >= 100 ? ' redeemable' : ''}`}>
+                ⭐ {matchedMember.points || 0} pts
+              </span>
+            </div>
+            <div className="metadata-item">
+              <span className="metadata-label">Balance Due</span>
+              <span className="metadata-value mono-text danger">
+                {formatMoney(matchedMember.balance)}
+              </span>
+            </div>
           </div>
-          <div className="metadata-item">
-            <span className="metadata-label">Expiry Date</span>
-            <span className="metadata-value mono-text danger">
-              {matchedMember.plan_end ? new Date(matchedMember.plan_end).toLocaleDateString() : 'N/A'}
+
+          <div className="expiry-section">
+            <div className="expiry-header">
+              <span className="expiry-label">Plan Status</span>
+              <span className="mono-text expiry-date">Expired</span>
+            </div>
+            <div className="expiry-bar">
+              <div
+                className="expiry-fill expired"
+                style={{ width: '100%' }}
+              />
+            </div>
+            <span className="expiry-status expired">
+              Expired {daysExpired} day{daysExpired === 1 ? '' : 's'} ago
             </span>
           </div>
-          <div className="metadata-item">
-            <span className="metadata-label">Balance Due</span>
-            <span className="metadata-value mono-text danger">
-              {formatMoney(matchedMember.balance)}
-            </span>
+
+          {/* Redeem 100 points for a free month — a way to reactivate (P2 5.8) */}
+          {(matchedMember.points || 0) >= 100 && (
+            <button className="btn btn-primary kiosk-redeem-btn" onClick={() => setShowRedeemModal(true)}>
+              🎁 Redeem 100 pts — 1 month free
+            </button>
+          )}
+
+          <div className="profile-actions">
+            <button className="btn btn-primary" onClick={handleRenew}>
+              Renew Plan
+            </button>
+            <button className="btn btn-secondary" onClick={handleManualOverride}>
+              Manual Override Entry
+            </button>
+            <button className="btn btn-secondary" onClick={resetToIdle}>
+              Cancel
+            </button>
           </div>
-        </div>
-        
-        <div className="expiry-section">
-          <div className="expiry-header">
-            <span className="expiry-label">Plan Status</span>
-            <span className="mono-text expiry-date">Expired</span>
-          </div>
-          <div className="expiry-bar">
-            <div 
-              className="expiry-fill expired"
-              style={{ width: '100%' }}
-            />
-          </div>
-          <span className="expiry-status expired">
-            Expired {matchedMember.plan_end ? Math.floor((Date.now() - new Date(matchedMember.plan_end).getTime()) / (1000 * 60 * 60 * 24)) : 0} days ago
-          </span>
-        </div>
-        
-        <div className="profile-actions">
-          <button className="btn btn-primary" onClick={handleRenew}>
-            Renew Plan
-          </button>
-          <button className="btn btn-secondary" onClick={handleManualOverride}>
-            Manual Override Entry
-          </button>
-          <button className="btn btn-secondary" onClick={resetToIdle}>
-            Cancel
-          </button>
         </div>
       </div>
     </div>
-  )
+    )
+  }
 
   const renderNoMatch = () => (
     <div className="kiosk-no-match">
@@ -1691,6 +1900,7 @@ function Kiosk({ onRefresh }: KioskProps) {
         <div className={`kiosk-screen${state === 'staff-verified' ? ' active' : ''}`}>{renderStaffVerified()}</div>
       </div>
       {showRenewModal && renderRenewModal()}
+      {showRedeemModal && renderRedeemModal()}
       {showGuestModal && renderGuestModal()}
 
       {/* ── P2 6.9: Daily Kiosk Executive Report (admin fingerprint intercept) ── */}

@@ -9,7 +9,7 @@ import Database from 'better-sqlite3'
 import AdmZip from 'adm-zip'
 import nodemailer from 'nodemailer'
 import { autoUpdater } from 'electron-updater'
-import { todayLocal, nowUtc, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays } from './utils'
+import { todayLocal, nowUtc, validateMember, validatePlan, validatePayment, validateCoach, validateUser, validateCheckin, clampNumber, isNonEmptyString, escapeLike, addDays, REFERRAL_POINTS, FREE_MONTH_POINTS, FREE_MONTH_DAYS } from './utils'
 import { Worker } from 'worker_threads'
 
 let mainWindow: BrowserWindow | null = null
@@ -248,6 +248,10 @@ const MAX_LOGIN_ATTEMPTS = 5
 const LOGIN_LOCKOUT_MS = 15 * 60 * 1000 // 15 minutes
 const loginAttempts = new Map<string, { count: number; lockedUntil: number }>()
 
+// Last staff member who logged in — used to attribute the automated end-of-day
+// report email (and any other background-generated reports) to a real person.
+let lastLoggedInUser: { display_name?: string | null; username?: string; role?: string } | null = null
+
 function recordFailedLogin(username: string) {
   const key = username.toLowerCase()
   const now = Date.now()
@@ -320,7 +324,7 @@ function initDatabase() {
     CREATE TABLE IF NOT EXISTS plans (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('monthly', 'quarterly', 'annual', 'session_pack', 'family')),
+      type TEXT NOT NULL CHECK(type IN ('monthly', 'quarterly', 'annual', 'session_pack', 'family', 'daily')),
       duration_days INTEGER,
       sessions INTEGER,
       price REAL NOT NULL,
@@ -362,6 +366,9 @@ function initDatabase() {
       archived INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       waiver_template_id INTEGER DEFAULT NULL,
+      -- Referral rewards (P2 5.8): who referred this member + the member's reward points balance
+      referrer_id INTEGER DEFAULT NULL,
+      points INTEGER DEFAULT 0,
       FOREIGN KEY (plan_id) REFERENCES plans(id),
       FOREIGN KEY (coach_id) REFERENCES coaches(id)
     );
@@ -492,6 +499,16 @@ function initDatabase() {
     { table: 'payments', column: 'note', def: 'TEXT DEFAULT NULL' },
     // P2 5.2: auto-renew flag — renews the plan automatically on expiry
     { table: 'members', column: 'auto_renew', def: 'INTEGER DEFAULT 0' },
+    // P2 5.8: referral rewards — who referred this member + reward points balance
+    { table: 'members', column: 'referrer_id', def: 'INTEGER DEFAULT NULL' },
+    { table: 'members', column: 'points', def: 'INTEGER DEFAULT 0' },
+    // P3: plan freeze — admin can freeze a member's plan for a set number of days
+    { table: 'members', column: 'frozen', def: 'INTEGER DEFAULT 0' },
+    { table: 'members', column: 'freeze_reason', def: 'TEXT DEFAULT NULL' },
+    { table: 'members', column: 'freeze_days', def: 'INTEGER DEFAULT 0' },
+    { table: 'members', column: 'freeze_start', def: 'DATE DEFAULT NULL' },
+    { table: 'members', column: 'freeze_end', def: 'DATE DEFAULT NULL' },
+    { table: 'members', column: 'freeze_attachment', def: 'TEXT DEFAULT NULL' },
   ]
 
   for (const col of columnsToAdd) {
@@ -546,6 +563,50 @@ function initDatabase() {
       }
       db!.pragma('user_version = 1')
       logMain('info', 'DB migration to v1 applied')
+    }
+    if (current < 2) {
+      // v2: allow the new 'daily' plan type. SQLite can't ALTER a CHECK
+      // constraint, so rebuild the plans table when the old constraint is baked
+      // in (fresh installs get the updated CREATE TABLE above instead).
+      let migrated = false
+      try {
+        const plansSql = db!.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'").get() as any
+        if (plansSql && !plansSql.sql.includes("'daily'")) {
+          db!.pragma('foreign_keys = OFF')
+          try {
+            db!.exec(`
+              BEGIN;
+              CREATE TABLE plans_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('monthly', 'quarterly', 'annual', 'session_pack', 'family', 'daily')),
+                duration_days INTEGER,
+                sessions INTEGER,
+                price REAL NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+              );
+              INSERT INTO plans_new (id, name, type, duration_days, sessions, price, created_at)
+                SELECT id, name, type, duration_days, sessions, price, created_at FROM plans;
+              DROP TABLE plans;
+              ALTER TABLE plans_new RENAME TO plans;
+              COMMIT;
+            `)
+          } catch (error: any) {
+            // Roll back any open transaction before restoring FK enforcement
+            try { db!.exec('ROLLBACK') } catch { /* no open transaction */ }
+            throw error
+          } finally {
+            db!.pragma('foreign_keys = ON')
+          }
+          logMain('info', 'DB migration to v2 applied (daily plan type)')
+        }
+        migrated = true
+      } catch (error: any) {
+        logMain('warn', 'Plans table migration skipped', { error: error.message })
+      }
+      // Only mark v2 as applied when it succeeded or wasn't needed — a failed
+      // rebuild is retried on the next launch instead of being silently skipped.
+      if (migrated) db!.pragma('user_version = 2')
     }
   }
   runMigrations()
@@ -957,11 +1018,46 @@ function processAutoRenewals() {
 function autoExpireMembers() {
   // Renew auto-renew members first so they stay active (P2 5.2)
   processAutoRenewals()
+  // Resume frozen plans whose freeze period has ended (P3)
+  resumeExpiredFreezes()
   db?.prepare(`
     UPDATE members SET status = 'expired'
     WHERE plan_end IS NOT NULL AND plan_end < date('now', 'localtime') AND status = 'active' AND archived = 0
       AND (auto_renew IS NULL OR auto_renew = 0)
   `).run()
+}
+
+// Resume frozen plans whose freeze period has ended (P3: Plan Freeze feature)
+// When the freeze_end date passes, extend plan_end by the original freeze_days
+// and clear all freeze-related columns. Called automatically inside autoExpireMembers.
+// Returns the number of members whose plans were resumed.
+function resumeExpiredFreezes(): number {
+  const today = todayLocal()
+  const frozenMembers = db?.prepare(
+    'SELECT id, name, plan_end, freeze_days FROM members WHERE frozen = 1 AND archived = 0 AND freeze_end IS NOT NULL AND freeze_end <= ?'
+  ).all(today) as any[] || []
+
+  let resumed = 0
+  for (const member of frozenMembers) {
+    try {
+      if (member.plan_end) {
+        const newPlanEnd = addDays(member.plan_end, member.freeze_days || 0)
+        db?.prepare('UPDATE members SET plan_end = ?, frozen = 0, freeze_reason = NULL, freeze_days = 0, freeze_start = NULL, freeze_end = NULL, freeze_attachment = NULL WHERE id = ?')
+          .run(newPlanEnd, member.id)
+      } else {
+        db?.prepare('UPDATE members SET frozen = 0, freeze_reason = NULL, freeze_days = 0, freeze_start = NULL, freeze_end = NULL, freeze_attachment = NULL WHERE id = ?')
+          .run(member.id)
+      }
+      db?.prepare(
+        `INSERT INTO activity_logs (action, entity_type, entity_id, details, user)
+         VALUES ('auto_unfreeze', 'member', ?, ?, 'system')`
+      ).run(member.id, JSON.stringify({ member_name: member.name, freeze_days: member.freeze_days }))
+      resumed++
+    } catch (error: any) {
+      logMain('error', 'Auto-resume frozen plan failed', { id: member.id, error: error.message })
+    }
+  }
+  return resumed
 }
 
 // ── SMTP Email (module scope — shared by manual sends and the auto daily report) ──
@@ -974,17 +1070,29 @@ function createSmtpTransport() {
 
   if (!host?.value) throw new Error('SMTP not configured. Go to Settings to set up email.')
 
+  const username = user?.value || ''
+  const password = pass?.value ? decryptSecret(pass.value) : ''
+
+  // Nodemailer throws the cryptic "Missing credentials for PLAIN" error when
+  // `auth` is present but empty. Surface a clear, actionable message instead
+  // when a username is set but the password can't be decrypted (e.g. the
+  // stored secret came from another machine/user and DPAPI can't unlock it).
+  if (username && !password) {
+    throw new Error('SMTP password is missing or could not be decrypted (Windows security). Open Settings → Email and re-enter or set your SMTP password.')
+  }
+
+  // Only pass auth when a username is configured — otherwise nodemailer tries
+  // PLAIN auth with empty credentials and fails on servers that request it.
+  const auth = username ? { user: username, pass: password } : undefined
+
   return {
     transport: nodemailer.createTransport({
       host: host.value,
       port: port?.value ? parseInt(port.value, 10) : 587,
       secure: port?.value ? parseInt(port.value, 10) === 465 : false,
-      auth: {
-        user: user?.value || '',
-        pass: pass?.value ? decryptSecret(pass.value) : '',
-      },
+      ...(auth ? { auth } : {}),
     }),
-    fromEmail: fromEmail?.value || user?.value || '',
+    fromEmail: fromEmail?.value || username,
   }
 }
 
@@ -1035,6 +1143,19 @@ function getDailyReportData(date: string) {
     ORDER BY m.balance DESC
   `).all(today) as any[]) || []
 
+  // Coach Report — per-coach summary scoped to the selected day (P3)
+  // Included inside the daily report so there is no separate coach tab/export.
+  const coaches = (db?.prepare(`
+    SELECT c.id as coach_id, c.name as coach_name, c.specialty,
+      (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0) as totalMembers,
+      (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0 AND m.status = 'active') as activeMembers,
+      (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id AND DATE(cfp.created_at, 'localtime') = ?) as periodCollected,
+      (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id) as totalCollected
+    FROM coaches c
+    WHERE c.archived = 0
+    ORDER BY c.name ASC
+  `).all(today) as any[]) || []
+
   return {
     date: today,
     totalRevenue: totalRevenueRow?.total || 0,
@@ -1045,11 +1166,14 @@ function getDailyReportData(date: string) {
     renewals: renewalsRow?.count || 0,
     outstandingCount: outstanding.length,
     outstanding,
+    coaches,
   }
 }
 
-// Build a styled HTML email body for the daily sales report
-function buildDailyReportEmailHtml(appName: string, r: ReturnType<typeof getDailyReportData>): string {
+// Build a styled HTML email body for the daily sales report.
+// generatedBy is the staff member who triggered/owns the report (e.g. the last
+// logged-in user) — shown in the footer so recipients know who generated it.
+function buildDailyReportEmailHtml(appName: string, r: ReturnType<typeof getDailyReportData>, generatedBy?: string | null): string {
   const esc = (s: unknown): string => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   const fmt = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   const methodLabel = (m: string) => (m || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -1105,7 +1229,7 @@ function buildDailyReportEmailHtml(appName: string, r: ReturnType<typeof getDail
       <tbody>${outstandingRows}</tbody>
     </table>` : ''}
 
-    <p style="color:#999;font-size:11px;border-top:1px solid #eee;padding-top:12px;margin:0">This is an automated end-of-day report generated by ${esc(appName)}.</p>
+    <p style="color:#999;font-size:11px;border-top:1px solid #eee;padding-top:12px;margin:0">This is an automated end-of-day report generated by ${esc(appName)}${generatedBy ? ` — Generated by ${esc(generatedBy)}` : ''}.</p>
   </div>
 </div>
 </body></html>`
@@ -1129,7 +1253,11 @@ async function sendAutoDailyReport() {
     const appNameRow = db?.prepare("SELECT value FROM settings WHERE key = 'appName'").get() as any
     const appName = appNameRow?.value || 'REPCHECK'
     const report = getDailyReportData(todayLocal())
-    const html = buildDailyReportEmailHtml(appName, report)
+    // Attribute the automated report to whoever was last logged in (if anyone).
+    const generatedBy = lastLoggedInUser
+      ? `${lastLoggedInUser.role === 'admin' ? 'Admin' : 'Staff'} · ${lastLoggedInUser.display_name || lastLoggedInUser.username}`
+      : null
+    const html = buildDailyReportEmailHtml(appName, report, generatedBy)
     await transport.sendMail({
       from: `"${appName}" <${fromEmail}>`,
       to: ownerEmail,
@@ -1384,8 +1512,8 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, waiver_template_id, auto_renew)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, waiver_template_id, auto_renew, referrer_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -1406,14 +1534,64 @@ function setupIPC() {
       member.balance,
       member.waiver_agreed_at || null,
       member.waiver_template_id ?? null,
-      member.auto_renew ? 1 : 0
+      member.auto_renew ? 1 : 0,
+      member.referrer_id || null
     )
+
+    // P2 5.8: referral reward — the referring member earns points when their
+    // referral actually joins. Only awarded when the referrer still exists.
+    let referralRewarded = false
+    if (res?.lastInsertRowid && member.referrer_id) {
+      const referrerId = Number(member.referrer_id)
+      if (referrerId > 0) {
+        const referrer = db?.prepare('SELECT id FROM members WHERE id = ? AND archived = 0').get(referrerId) as any
+        if (referrer) {
+          db?.prepare('UPDATE members SET points = points + ? WHERE id = ?').run(REFERRAL_POINTS, referrerId)
+          referralRewarded = true
+        }
+      }
+    }
+
     // P2 5.5: fire-and-forget welcome email on enrollment (setting-gated, SMTP optional)
     if (res?.lastInsertRowid) {
       sendWelcomeEmail(Number(res.lastInsertRowid)).catch(() => {})
     }
     broadcastDataChanged(event.sender)
-    return res
+    return { ...res, referralRewarded }
+  })
+
+  // P2 5.8: redeem reward points for 1 month of free membership at the kiosk.
+  // Deducts 100 points and extends plan_end by 30 days (from today if the plan
+  // is already expired — never backwards).
+  ipcMain.handle('redeem-free-month', (event, memberId: number) => {
+    try {
+      const member = db?.prepare('SELECT * FROM members WHERE id = ? AND archived = 0').get(memberId) as any
+      if (!member) return { success: false, message: 'Member not found.' }
+      const points = member.points || 0
+      if (points < FREE_MONTH_POINTS) {
+        return {
+          success: false,
+          message: `Not enough points to redeem. You need ${FREE_MONTH_POINTS} points for a free month (current balance: ${points}).`,
+        }
+      }
+      const today = todayLocal()
+      // Extend from the later of today / current plan end so an expired member
+      // restarts from today and an active member gets +30 days on top.
+      const base = member.plan_end && member.plan_end > today ? member.plan_end : today
+      const newEnd = addDays(base, FREE_MONTH_DAYS)
+      db?.prepare("UPDATE members SET points = points - ?, plan_end = ?, status = 'active' WHERE id = ?")
+        .run(FREE_MONTH_POINTS, newEnd, memberId)
+      broadcastDataChanged(event.sender)
+      return {
+        success: true,
+        message: `Redeemed ${FREE_MONTH_POINTS} points for 1 month of free membership!`,
+        planEnd: newEnd,
+        points: points - FREE_MONTH_POINTS,
+      }
+    } catch (error: any) {
+      console.error('redeem-free-month error:', error)
+      return { success: false, message: error.message }
+    }
   })
 
   ipcMain.handle('update-member', (event, id: number, member) => {
@@ -1457,6 +1635,113 @@ function setupIPC() {
     const res = db?.prepare('UPDATE members SET archived = 1 WHERE id = ?').run(id)
     broadcastDataChanged(event.sender)
     return res
+  })
+
+  // P3: Freeze member plan — admin-only feature
+  // Saves the freeze request with reason, attachment, and duration.
+  // The plan_end is extended by the freeze days when the freeze ends.
+  ipcMain.handle('freeze-member', (event, id: number, freezeData: {
+    reason: string,
+    custom_reason?: string,
+    days: number,
+    attachment?: string
+  }) => {
+    try {
+      const member = db?.prepare('SELECT * FROM members WHERE id = ? AND archived = 0').get(id) as any
+      if (!member) return { success: false, message: 'Member not found.' }
+      if (member.frozen) return { success: false, message: 'Member plan is already frozen.' }
+
+      const today = todayLocal()
+      const freezeEnd = addDays(today, freezeData.days)
+      
+      // Save attachment if provided
+      let attachmentUrl = null
+      if (freezeData.attachment) {
+        attachmentUrl = savePhotoToDisk(freezeData.attachment)
+      }
+
+      // Update member with freeze info
+      db?.prepare(`
+        UPDATE members SET 
+          frozen = 1,
+          freeze_reason = ?,
+          freeze_days = ?,
+          freeze_start = ?,
+          freeze_end = ?,
+          freeze_attachment = ?
+        WHERE id = ?
+      `).run(
+        freezeData.reason === 'other' ? freezeData.custom_reason : freezeData.reason,
+        freezeData.days,
+        today,
+        freezeEnd,
+        attachmentUrl,
+        id
+      )
+
+      // Log the action
+      db?.prepare(`
+        INSERT INTO activity_logs (action, entity_type, entity_id, details, user)
+        VALUES ('freeze_plan', 'member', ?, ?, ?)
+      `).run(id, JSON.stringify({
+        member_name: member.name,
+        reason: freezeData.reason === 'other' ? freezeData.custom_reason : freezeData.reason,
+        days: freezeData.days,
+        freeze_end: freezeEnd
+      }), logActorLabel(null))
+
+      broadcastDataChanged(event.sender)
+      return { success: true, message: `Plan frozen for ${freezeData.days} days until ${freezeEnd}.` }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  // Unfreeze member plan — admin-only feature
+  ipcMain.handle('unfreeze-member', (event, id: number) => {
+    try {
+      const member = db?.prepare('SELECT * FROM members WHERE id = ? AND archived = 0').get(id) as any
+      if (!member) return { success: false, message: 'Member not found.' }
+      if (!member.frozen) return { success: false, message: 'Member plan is not frozen.' }
+
+      const today = todayLocal()
+      
+      // Extend plan_end by the remaining freeze days
+      if (member.plan_end && member.freeze_end) {
+        const freezeEnd = new Date(member.freeze_end)
+        const todayDate = new Date(today)
+        if (freezeEnd > todayDate) {
+          const remainingDays = Math.ceil((freezeEnd.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24))
+          const newPlanEnd = addDays(member.plan_end, remainingDays)
+          db?.prepare('UPDATE members SET plan_end = ?, frozen = 0, freeze_reason = NULL, freeze_days = 0, freeze_start = NULL, freeze_end = NULL, freeze_attachment = NULL WHERE id = ?')
+            .run(newPlanEnd, id)
+        } else {
+          // Freeze has ended, just unfreeze
+          db?.prepare('UPDATE members SET frozen = 0, freeze_reason = NULL, freeze_days = 0, freeze_start = NULL, freeze_end = NULL, freeze_attachment = NULL WHERE id = ?')
+            .run(id)
+        }
+      } else {
+        db?.prepare('UPDATE members SET frozen = 0, freeze_reason = NULL, freeze_days = 0, freeze_start = NULL, freeze_end = NULL, freeze_attachment = NULL WHERE id = ?')
+          .run(id)
+      }
+
+      // Log the action
+      db?.prepare(`
+        INSERT INTO activity_logs (action, entity_type, entity_id, details, user)
+        VALUES ('unfreeze_plan', 'member', ?, ?, ?)
+      `).run(id, JSON.stringify({ member_name: member.name }), logActorLabel(null))
+
+      broadcastDataChanged(event.sender)
+      return { success: true, message: 'Plan unfrozen successfully.' }
+    } catch (error: any) {
+      return { success: false, message: error.message }
+    }
+  })
+
+  // Auto-resume frozen plans that have expired (delegates to shared resumeExpiredFreezes)
+  ipcMain.handle('auto-resume-frozen-plans', () => {
+    const count = resumeExpiredFreezes()
+    return { resumed: count }
   })
 
   ipcMain.handle('search-members', (_, query: string) => {
@@ -2026,16 +2311,34 @@ function setupIPC() {
     return settings
   })
 
-ipcMain.handle('get-setting', (_, key: string) => {
+  ipcMain.handle('get-setting', (_, key: string) => {
     const row = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
     if (!row?.value) return null
     return isSecretSetting(key) ? decryptSecret(row.value) : row.value
+  })
+
+  // Diagnose a stored secret: whether a value exists and whether it can be
+  // decrypted on THIS machine. Lets the Settings UI warn when a saved SMTP
+  // password (or owner email) survives but can't be unlocked (e.g. restored
+  // from a backup made on another machine/user, so DPAPI can't decrypt it).
+  ipcMain.handle('get-secret-status', (_, key: string) => {
+    if (!isSecretSetting(key)) return { stored: false, decrypted: false }
+    const row = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
+    if (!row?.value) return { stored: false, decrypted: false }
+    // decryptSecret never throws — it returns '' on failure and logs internally.
+    return { stored: true, decrypted: decryptSecret(row.value) !== '' }
   })
 
   // App version (used by the login screen footer so it always matches package.json)
   ipcMain.handle('get-version', () => app.getVersion())
 
   ipcMain.handle('save-setting', (_, key: string, value: string) => {
+    // Same keep-existing guard as save-settings: an empty secret field in the UI
+    // means "keep the saved one", so we never wipe a stored credential.
+    if (isSecretSetting(key) && !value) {
+      const existing = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
+      if (existing?.value) return { kept: true }
+    }
     const stored = isSecretSetting(key) ? encryptSecret(value) : value
     return db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, stored)
   })
@@ -2044,6 +2347,14 @@ ipcMain.handle('get-setting', (_, key: string) => {
     const stmt = db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
     const insertMany = db?.transaction((entries: [string, string][]) => {
       entries.forEach(([key, value]) => {
+        // Secret fields are masked in the UI — an empty value means "keep the
+        // saved one". This prevents a blank password field (e.g. when the stored
+        // secret couldn't be decrypted after a restore) from wiping the stored
+        // credential on save, which caused "Missing credentials for PLAIN".
+        if (isSecretSetting(key) && !value) {
+          const existing = db?.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
+          if (existing?.value) return // keep existing secret, don't overwrite
+        }
         const stored = isSecretSetting(key) ? encryptSecret(value) : value
         stmt?.run(key, stored)
       })
@@ -2362,6 +2673,19 @@ if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest
         SELECT COUNT(*) as count FROM members WHERE status = 'active' AND archived = 0
       `).get() as any
 
+      // Coach Report — per-coach summary scoped to the selected month (P3)
+      // Included inside the monthly report so there is no separate coach tab/export.
+      const coaches = db?.prepare(`
+        SELECT c.id as coach_id, c.name as coach_name, c.specialty,
+          (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0) as totalMembers,
+          (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0 AND m.status = 'active') as activeMembers,
+          (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id AND strftime('%Y-%m', cfp.created_at, 'localtime') = ?) as periodCollected,
+          (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id) as totalCollected
+        FROM coaches c
+        WHERE c.archived = 0
+        ORDER BY c.name ASC
+      `).all(ym) as any[] || []
+
       const totalRevenue = revenueRow?.total || 0
       const activeCount = activeCountRow?.count || 1
 
@@ -2382,6 +2706,7 @@ if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest
         outstandingCount: outstanding.length,
         activeMemberCount: activeCount,
         avgRevenuePerMember: activeCount > 0 ? totalRevenue / activeCount : 0,
+        coaches,
       }
     } catch (error) {
       console.error('get-monthly-report error:', error)
@@ -2632,6 +2957,10 @@ if (deserialized.guest_checkins) insertRows('guest_checkins', deserialized.guest
       db?.prepare(
         'INSERT INTO activity_logs (action, entity_type, entity_id, details, user) VALUES (?, ?, ?, ?, ?)'
       ).run('login_success', 'staff', user.id, JSON.stringify({ username }), logActorLabel(user))
+
+      // Remember who's logged in so background reports (auto daily email) can
+      // attribute themselves to the real person instead of a generic label.
+      lastLoggedInUser = { display_name: user.display_name, username: user.username, role: user.role }
 
       return {
         success: true,

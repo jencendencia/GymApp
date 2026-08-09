@@ -20,6 +20,8 @@ interface MembersTableProps {
   onOpenNewPlan: (member: Member) => void
   onDelete: (member: Member) => void
   onShowQr: (member: Member) => void
+  onFreeze?: (member: Member) => void
+  onUnfreeze?: (member: Member) => void
 }
 
 function calcDaysRemaining(dateStr?: string): number | null {
@@ -44,6 +46,7 @@ function MembersTable(props: MembersTableProps) {
     memberTab, members, expiringMembers, totalMembers, memberPage, pageSize, loading,
     isAdmin, getPlanName, onTabChange, onPageChange,
     onOpenEdit, onOpenIdCard, onOpenNewPlan, onDelete, onShowQr,
+    onFreeze, onUnfreeze,
   } = props
 
   // Match the original split: all-tab shows ID card (no QR), expiring-tab shows QR (no ID card)
@@ -56,6 +59,15 @@ function MembersTable(props: MembersTableProps) {
         <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onOpenIdCard(member) }} title="Member ID Card">🪪</button>
       )}
       <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onOpenNewPlan(member) }} title="New Plan">📋</button>
+      {isAdmin && onFreeze && onUnfreeze && (
+        <>
+          {member.frozen ? (
+            <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onUnfreeze(member) }} title="Unfreeze Plan" style={{ color: 'var(--info)' }}>🔓</button>
+          ) : (
+            <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onFreeze(member) }} title="Freeze Plan">❄️</button>
+          )}
+        </>
+      )}
       {isAdmin && (
         <button className="btn-icon danger" onClick={(e) => { e.stopPropagation(); onDelete(member) }} title="Delete">✕</button>
       )}
@@ -133,7 +145,15 @@ function MembersTable(props: MembersTableProps) {
                     <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
                     <td>{member.name}</td>
                     <td>{getPlanName(member.plan_id)}</td>
-                    <td><span className={`status-badge ${member.status}`}>{member.status}</span></td>
+                    <td>
+                      {member.frozen ? (
+                        <span className="status-badge frozen" title={member.freeze_end ? `Frozen until ${new Date(member.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                          ❄️ Frozen
+                        </span>
+                      ) : (
+                        <span className={`status-badge ${member.status}`}>{member.status}</span>
+                      )}
+                    </td>
                     <td className="mono-text">{formatMoney(member.balance)}</td>
                     <td className="mono-text">{member.plan_end ? new Date(member.plan_end).toLocaleDateString() : 'N/A'}</td>
                     <td className="mono-text"><DayCell member={member} /></td>
@@ -206,7 +226,15 @@ function MembersTable(props: MembersTableProps) {
                           <span className="days-left days-warning">{daysLeft} days</span>
                         )}
                       </td>
-                      <td><span className={`status-badge ${member.status}`}>{member.status}</span></td>
+                      <td>
+                      {member.frozen ? (
+                        <span className="status-badge frozen" title={member.freeze_end ? `Frozen until ${new Date(member.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                          ❄️ Frozen
+                        </span>
+                      ) : (
+                        <span className={`status-badge ${member.status}`}>{member.status}</span>
+                      )}
+                    </td>
                       <td>{renderWaiver(member)}</td>
                       <td>{renderActions(member, true, false)}</td>
                     </tr>

@@ -12,6 +12,9 @@ import MembersTable from './members/MembersTable'
 import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState, emptyFingerprints } from './members/MemberFormModal'
 import NewPlanModal, { NewPlanData, NewPlanPayment } from './members/NewPlanModal'
 import { QrCodeModal, IdCardModal } from './members/MemberModals'
+import FreezePlanModal from './members/FreezePlanModal'
+import UnfreezePlanModal from './members/UnfreezePlanModal'
+import DailyMemberModal from './members/DailyMemberModal'
 import { ENROLL_STEPS, FingerprintSlotData } from './FingerprintEnrollment'
 
 // Payment methods that require a transaction reference number
@@ -41,10 +44,13 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [membersLoading, setMembersLoading] = useState(false)
   const [selectedMember, setSelectedMember] = useState<Member | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Member | null>(null)
+  const [freezeTarget, setFreezeTarget] = useState<Member | null>(null)
+  const [unfreezeTarget, setUnfreezeTarget] = useState<Member | null>(null)
   const [idCardMember, setIdCardMember] = useState<Member | null>(null)
   const [idCardQr, setIdCardQr] = useState('')
   const [idCardPrinting, setIdCardPrinting] = useState(false)
   const [showForm, setShowForm] = useState(false)
+  const [showDailyForm, setShowDailyForm] = useState(false)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [fingerprint, setFingerprint] = useState<FingerprintState>(emptyFingerprints())
   const [waiverAgreed, setWaiverAgreed] = useState(false)
@@ -129,6 +135,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     balance: 0,
     status: 'active',
     photo: '',
+    referrer_id: 0,
   })
 
   useEffect(() => {
@@ -441,7 +448,20 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
         waiver_template_id: waiverAgreed ? (selectedWaiverTemplateId ?? undefined) : undefined,
         auto_renew: formAutoRenew ? 1 : 0,
+        referrer_id: formData.referrer_id || undefined,
       })
+
+      // P2 5.8: the referrer's +20 reward points were granted by the backend on
+      // create — record it in the activity log (only when actually awarded).
+      if (result?.referralRewarded) {
+        const referrer = allMembers.find(m => m.id === formData.referrer_id)
+        log.referralReward(
+          formData.referrer_id,
+          referrer?.name || `Member #${formData.referrer_id}`,
+          formData.name,
+          20
+        )
+      }
 
       // Get the numeric ID of the newly created member
       const newNumericId = result?.lastInsertRowid ? Number(result.lastInsertRowid) : 0
@@ -600,6 +620,51 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     }
   }
 
+  const handleFreeze = async (memberId: number, freezeData: {
+    reason: string
+    custom_reason?: string
+    days: number
+    attachment?: string
+  }) => {
+    try {
+      const result = await window.electronAPI.freezeMember(memberId, freezeData)
+      if (result.success) {
+        showToast('success', result.message || 'Plan frozen successfully.')
+        setFreezeTarget(null)
+        notifyDataChanged()
+        return { success: true }
+      } else {
+        showToast('error', result.message || 'Failed to freeze plan.')
+        return { success: false, message: result.message }
+      }
+    } catch (error: any) {
+      showToast('error', error.message || 'Failed to freeze plan.')
+      return { success: false, message: error.message }
+    }
+  }
+
+  // Opens the unfreeze confirm modal (the modal itself shows the freeze details)
+  const handleUnfreeze = (member: Member) => {
+    setUnfreezeTarget(member)
+  }
+
+  const confirmUnfreeze = async (memberId: number) => {
+    try {
+      const result = await window.electronAPI.unfreezeMember(memberId)
+      if (result.success) {
+        showToast('success', result.message || 'Plan unfrozen successfully.')
+        notifyDataChanged()
+        setUnfreezeTarget(null)
+      } else {
+        showToast('error', result.message || 'Failed to unfreeze plan.')
+      }
+      return result
+    } catch (error: any) {
+      showToast('error', error.message || 'Failed to unfreeze plan.')
+      return { success: false, message: error.message }
+    }
+  }
+
   const getDefaultStartDate = () => todayLocal()
 
   const getDefaultEndDate = () => {
@@ -630,6 +695,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       balance: 0,
       status: 'active',
       photo: '',
+      referrer_id: 0,
     })
     setPhotoPreview(null)
     setFingerprint(emptyFingerprints())
@@ -802,6 +868,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       balance: member.balance || 0,
       status: member.status,
       photo: member.photo || '',
+      referrer_id: member.referrer_id || 0,
     })
     setPhotoPreview(member.photo || null)
     setWaiverAgreed(!!member.waiver_agreed_at)
@@ -1090,6 +1157,16 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           }}>
             + Add Member
           </button>
+          <button
+            className="btn btn-daily"
+            onClick={() => {
+              setFingerprint(emptyFingerprints())
+              setShowDailyForm(true)
+            }}
+            title="Quick-enroll a daily member with fingerprint check-in"
+          >
+            ☀️ Daily
+          </button>
         </div>
       </div>
 
@@ -1110,6 +1187,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         onOpenNewPlan={openNewPlanModal}
         onDelete={(m) => setDeleteTarget(m)}
         onShowQr={handleShowQr}
+        onFreeze={(m) => setFreezeTarget(m)}
+        onUnfreeze={handleUnfreeze}
       />
 
       {/* New Plan Modal */}
@@ -1155,6 +1234,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           selectedMember={selectedMember}
           plans={plans}
           coaches={coaches}
+          members={allMembers}
           formData={formData}
           onFormDataChange={setFormData}
           paymentForm={paymentForm}
@@ -1236,6 +1316,41 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         onConfirm={() => deleteTarget && handleDelete(deleteTarget.id)}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {/* Freeze Plan Modal */}
+      {freezeTarget && (
+        <FreezePlanModal
+          member={freezeTarget}
+          onClose={() => setFreezeTarget(null)}
+          onFreeze={handleFreeze}
+        />
+      )}
+
+      {/* Unfreeze Plan Modal — shows freeze details before confirming */}
+      {unfreezeTarget && (
+        <UnfreezePlanModal
+          member={unfreezeTarget}
+          onClose={() => setUnfreezeTarget(null)}
+          onUnfreeze={confirmUnfreeze}
+        />
+      )}
+
+      {/* Daily Member Modal — quick enrollment with name, waiver, fingerprint, plan, payment */}
+      {showDailyForm && (
+        <DailyMemberModal
+          plans={plans}
+          waiverTemplates={waiverTemplates}
+          captureFinger={captureFingerOnce}
+          onCreated={() => {
+            setShowDailyForm(false)
+            setFingerprint(emptyFingerprints())
+          }}
+          onClose={() => {
+            setShowDailyForm(false)
+            setFingerprint(emptyFingerprints())
+          }}
+        />
+      )}
     </div>
   )
 }
