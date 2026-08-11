@@ -3209,154 +3209,11 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
 
   // ── Renewal reminders (deduplicated per channel via reminders table) ──
   // Email goes to members expiring within 7 days; SMS (PhilSMS) to members
-  // expiring within 3 days — the 3/1-day escalation window. Each channel has
-  // its own dedup so a member who already got an email can still get an SMS
-  // (and vice versa). SMS is queued through the same worker as check-in
-  // alerts, so the simulator + outbox retry apply automatically.
+  // expiring within 3 days. Each channel has its own dedup (reminders table),
+  // so a member who already got an email can still get an SMS and vice versa.
+  // Implementation shared with the automatic daily scheduler (below).
   ipcMain.handle('send-renewal-reminders', async () => {
-    try {
-      const today = todayLocal()
-      const appNameRow = db?.prepare("SELECT value FROM settings WHERE key = 'appName'").get() as any
-      const appDisplayName = appNameRow?.value || 'REPCHECK'
-
-      const results: { member_id: number; name: string; channel: string; sent: boolean; message: string }[] = []
-
-      // ── Email pass (SMTP optional — skipped when not configured) ──
-      let emailSent = 0
-      let emailSkipped = 0
-      let transport: ReturnType<typeof createSmtpTransport>['transport'] | null = null
-      let sender = ''
-      try {
-        const smtp = createSmtpTransport()
-        transport = smtp.transport
-        sender = smtp.fromEmail
-      } catch {
-        transport = null // SMTP not configured — email pass is skipped
-      }
-
-      if (transport) {
-
-        // Active members with an email expiring in the next 7 days
-        const expiring = db?.prepare(`
-          SELECT m.id, m.name, m.email, m.plan_end, p.name as plan_name
-          FROM members m
-          LEFT JOIN plans p ON m.plan_id = p.id
-          WHERE m.status = 'active' AND m.archived = 0 AND m.email IS NOT NULL AND m.email != ''
-            AND m.plan_end IS NOT NULL AND m.plan_end != ''
-            AND m.plan_end BETWEEN ? AND date(?, '+7 days')
-        `).all(today, today) as any[] || []
-
-        for (const member of expiring) {
-          // Dedupe per channel: skip if an EMAIL reminder was sent in the last 7 days
-          const recent = db?.prepare(`
-            SELECT COUNT(*) as count FROM reminders
-            WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'email' AND sent_at >= datetime('now', '-7 days')
-          `).get(member.id) as any
-          if (recent?.count > 0) {
-            results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: 'Email reminder already sent recently' })
-            emailSkipped++
-            continue
-          }
-
-          const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
-          const endLabel = new Date(member.plan_end + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-          const html = `
-            <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;color:#222">
-              <h2 style="color:#1a1a2e;margin:0 0 4px">Hi ${member.name},</h2>
-              <p>Your <strong>${member.plan_name || 'membership'}</strong> plan at <strong>${appDisplayName}</strong> expires on <strong>${endLabel}</strong> (${daysLeft} day${daysLeft === 1 ? '' : 's'} left).</p>
-              <p>Renew at the front desk to keep your membership active without interruption.</p>
-              <p style="color:#888;font-size:12px;margin-top:24px">— ${appDisplayName} · This is an automated reminder.</p>
-            </div>`
-
-          // Per-member try/catch: one rejected recipient must not abort the
-          // whole run — the SMS pass below should still go out.
-          try {
-            await transport.sendMail({
-              from: `"${appDisplayName}" <${sender}>`,
-              to: member.email,
-              subject: `Your ${appDisplayName} membership expires soon`,
-              html,
-            })
-          } catch (error: any) {
-            results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: `Send failed: ${error.message}` })
-            emailSkipped++
-            continue
-          }
-
-          db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
-            .run(member.id, 'renewal_reminder', 'email')
-          results.push({ member_id: member.id, name: member.name, channel: 'email', sent: true, message: 'Sent' })
-          emailSent++
-        }
-        transport.close()
-      }
-
-      // ── SMS pass (PhilSMS — gated on the delivery channel) ──
-      let smsSent = 0
-      let smsSkipped = 0
-      if (sms.getSmsConfig().channel !== 'off') {
-        // Active members with a phone expiring within 3 days (3/1-day window)
-        const expiringSms = db?.prepare(`
-          SELECT m.id, m.name, m.phone, m.plan_end, p.name as plan_name
-          FROM members m
-          LEFT JOIN plans p ON m.plan_id = p.id
-          WHERE m.status = 'active' AND m.archived = 0 AND m.phone IS NOT NULL AND m.phone != ''
-            AND m.plan_end IS NOT NULL AND m.plan_end != ''
-            AND m.plan_end BETWEEN ? AND date(?, '+3 days')
-        `).all(today, today) as any[] || []
-
-        for (const member of expiringSms) {
-          const recipient = sms.normalizePhPhone(member.phone)
-          if (!recipient) {
-            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'Invalid phone number' })
-            smsSkipped++
-            continue
-          }
-          // Dedupe per channel: skip if an SMS reminder was queued in the last
-          // 7 days. NOTE: the row is recorded at QUEUE time — if the worker later
-          // flags the message FAILED (no credits, sender ID unapproved), retry it
-          // from the SMS outbox in Settings; it won't be re-queued automatically
-          // until the 7-day window passes.
-          const recent = db?.prepare(`
-            SELECT COUNT(*) as count FROM reminders
-            WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'sms' AND sent_at >= datetime('now', '-7 days')
-          `).get(member.id) as any
-          if (recent?.count > 0) {
-            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS reminder already queued recently' })
-            smsSkipped++
-            continue
-          }
-
-          const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
-          const id = sms.queueRenewalSms(member, member.plan_name || 'membership', daysLeft)
-          if (id) {
-            db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
-              .run(member.id, 'renewal_reminder', 'sms')
-            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: true, message: 'Queued for delivery' })
-            smsSent++
-          } else {
-            results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS delivery off or template empty' })
-            smsSkipped++
-          }
-        }
-      }
-
-      const anyConfigured = transport !== null || sms.getSmsConfig().channel !== 'off'
-      if (!anyConfigured) {
-        return { success: false, message: 'No delivery channel configured — set up SMTP (email) or enable SMS in Settings.', sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results }
-      }
-      return {
-        success: true,
-        sent: emailSent,
-        skipped: emailSkipped,
-        smsSent,
-        smsSkipped,
-        results,
-      }
-    } catch (error: any) {
-      console.error('send-renewal-reminders error:', error)
-      return { success: false, message: error.message, sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results: [] }
-    }
+    return runRenewalReminders()
   })
 
   // ── P2 5.1: Printable member ID card (opens a print dialog) ──
@@ -3447,6 +3304,212 @@ function setupAutoUpdater() {
       info,
     })
   })
+}
+
+// ── Renewal reminders — single implementation shared by the manual Reports
+// button and the automatic daily scheduler ──
+// Email goes to members expiring within 7 days; SMS (PhilSMS) to members
+// expiring within 3 days. Each channel has its own dedup (reminders table),
+// so a member who already got an email can still get an SMS and vice versa.
+// SMS is queued through the same worker as payment receipts, so the
+// simulator + outbox retry apply automatically.
+async function runRenewalReminders() {
+  try {
+    const today = todayLocal()
+    const appNameRow = db?.prepare("SELECT value FROM settings WHERE key = 'appName'").get() as any
+    const appDisplayName = appNameRow?.value || 'REPCHECK'
+
+    const results: { member_id: number; name: string; channel: string; sent: boolean; message: string }[] = []
+
+    // ── Email pass (SMTP optional — skipped when not configured) ──
+    let emailSent = 0
+    let emailSkipped = 0
+    let transport: ReturnType<typeof createSmtpTransport>['transport'] | null = null
+    let sender = ''
+    try {
+      const smtp = createSmtpTransport()
+      transport = smtp.transport
+      sender = smtp.fromEmail
+    } catch {
+      transport = null // SMTP not configured — email pass is skipped
+    }
+
+    if (transport) {
+
+      // Active members with an email expiring in the next 7 days
+      const expiring = db?.prepare(`
+        SELECT m.id, m.name, m.email, m.plan_end, p.name as plan_name
+        FROM members m
+        LEFT JOIN plans p ON m.plan_id = p.id
+        WHERE m.status = 'active' AND m.archived = 0 AND m.email IS NOT NULL AND m.email != ''
+          AND m.plan_end IS NOT NULL AND m.plan_end != ''
+          AND m.plan_end BETWEEN ? AND date(?, '+7 days')
+      `).all(today, today) as any[] || []
+
+      for (const member of expiring) {
+        // Dedupe per channel: skip if an EMAIL reminder was sent in the last 7 days
+        const recent = db?.prepare(`
+          SELECT COUNT(*) as count FROM reminders
+          WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'email' AND sent_at >= datetime('now', '-7 days')
+        `).get(member.id) as any
+        if (recent?.count > 0) {
+          results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: 'Email reminder already sent recently' })
+          emailSkipped++
+          continue
+        }
+
+        const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
+        const endLabel = new Date(member.plan_end + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+        const html = `
+          <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:520px;margin:0 auto;color:#222">
+            <h2 style="color:#1a1a2e;margin:0 0 4px">Hi ${member.name},</h2>
+            <p>Your <strong>${member.plan_name || 'membership'}</strong> plan at <strong>${appDisplayName}</strong> expires on <strong>${endLabel}</strong> (${daysLeft} day${daysLeft === 1 ? '' : 's'} left).</p>
+            <p>Renew at the front desk to keep your membership active without interruption.</p>
+            <p style="color:#888;font-size:12px;margin-top:24px">— ${appDisplayName} · This is an automated reminder.</p>
+          </div>`
+
+        // Per-member try/catch: one rejected recipient must not abort the
+        // whole run — the SMS pass below should still go out.
+        try {
+          await transport.sendMail({
+            from: `"${appDisplayName}" <${sender}>`,
+            to: member.email,
+            subject: `Your ${appDisplayName} membership expires soon`,
+            html,
+          })
+        } catch (error: any) {
+          results.push({ member_id: member.id, name: member.name, channel: 'email', sent: false, message: `Send failed: ${error.message}` })
+          emailSkipped++
+          continue
+        }
+
+        db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
+          .run(member.id, 'renewal_reminder', 'email')
+        results.push({ member_id: member.id, name: member.name, channel: 'email', sent: true, message: 'Sent' })
+        emailSent++
+      }
+      transport.close()
+    }
+
+    // ── SMS pass (PhilSMS — gated on the delivery channel) ──
+    let smsSent = 0
+    let smsSkipped = 0
+    if (sms.getSmsConfig().channel !== 'off') {
+      // Active members with a phone expiring within 3 days (3/1-day window)
+      const expiringSms = db?.prepare(`
+        SELECT m.id, m.name, m.phone, m.plan_end, p.name as plan_name
+        FROM members m
+        LEFT JOIN plans p ON m.plan_id = p.id
+        WHERE m.status = 'active' AND m.archived = 0 AND m.phone IS NOT NULL AND m.phone != ''
+          AND m.plan_end IS NOT NULL AND m.plan_end != ''
+          AND m.plan_end BETWEEN ? AND date(?, '+3 days')
+      `).all(today, today) as any[] || []
+
+      for (const member of expiringSms) {
+        const recipient = sms.normalizePhPhone(member.phone)
+        if (!recipient) {
+          results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'Invalid phone number' })
+          smsSkipped++
+          continue
+        }
+        // Dedupe per channel: skip if an SMS reminder was queued in the last
+        // 7 days. NOTE: the row is recorded at QUEUE time — if the worker later
+        // flags the message FAILED (no credits, sender ID unapproved), retry it
+        // from the SMS outbox in Settings; it won't be re-queued automatically
+        // until the 7-day window passes.
+        const recent = db?.prepare(`
+          SELECT COUNT(*) as count FROM reminders
+          WHERE member_id = ? AND type = 'renewal_reminder' AND channel = 'sms' AND sent_at >= datetime('now', '-7 days')
+        `).get(member.id) as any
+        if (recent?.count > 0) {
+          results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS reminder already queued recently' })
+          smsSkipped++
+          continue
+        }
+
+        const daysLeft = Math.max(0, Math.ceil((new Date(member.plan_end + 'T00:00:00').getTime() - Date.now()) / 86400000))
+        const id = sms.queueRenewalSms(member, member.plan_name || 'membership', daysLeft)
+        if (id) {
+          db?.prepare('INSERT INTO reminders (member_id, type, channel) VALUES (?, ?, ?)')
+            .run(member.id, 'renewal_reminder', 'sms')
+          results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: true, message: 'Queued for delivery' })
+          smsSent++
+        } else {
+          results.push({ member_id: member.id, name: member.name, channel: 'sms', sent: false, message: 'SMS delivery off or template empty' })
+          smsSkipped++
+        }
+      }
+    }
+
+    const anyConfigured = transport !== null || sms.getSmsConfig().channel !== 'off'
+    if (!anyConfigured) {
+      return { success: false, message: 'No delivery channel configured — set up SMTP (email) or enable SMS in Settings.', sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results }
+    }
+    return {
+      success: true,
+      sent: emailSent,
+      skipped: emailSkipped,
+      smsSent,
+      smsSkipped,
+      results,
+    }
+  } catch (error: any) {
+    console.error('send-renewal-reminders error:', error)
+    return { success: false, message: error.message, sent: 0, skipped: 0, smsSent: 0, smsSkipped: 0, results: [] }
+  }
+}
+
+// ── Automated renewal reminders (daily at reminderHour) ──
+// Settings: autoRemindersEnabled ('true'), reminderHour (0-23). Reuses the
+// same deduplicated email + SMS pass as the manual Reports button and runs at
+// most once per day while the app is open (like the auto report + backups).
+// Re-entrancy guard: the 60s tick can overlap a long run (sequential SMTP
+// sends), so skip if a run is already in flight — mirrors sms.ts tickRunning.
+let reminderRunInProgress = false
+
+async function sendAutoRenewalReminders() {
+  if (reminderRunInProgress) return
+  reminderRunInProgress = true
+  try {
+    const enabled = db?.prepare("SELECT value FROM settings WHERE key = 'autoRemindersEnabled'").get() as any
+    if (enabled?.value !== 'true') return
+    const hourRow = db?.prepare("SELECT value FROM settings WHERE key = 'reminderHour'").get() as any
+    const hour = clampNumber(hourRow?.value, 0, 23, 9)
+    if (new Date().getHours() !== hour) return
+    const lastRow = db?.prepare("SELECT value FROM settings WHERE key = 'lastAutoReminders'").get() as any
+    if (lastRow?.value === todayLocal()) return
+
+    const result = await runRenewalReminders()
+    // Mark the day done only when at least one channel is configured; otherwise
+    // retry on the next tick so a mid-day setup still fires today.
+    if (result.success) {
+      db?.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lastAutoReminders', ?)").run(todayLocal())
+    }
+    logMain('info', 'Auto renewal reminders run', {
+      emailSent: result.sent,
+      emailSkipped: result.skipped,
+      smsSent: result.smsSent,
+      smsSkipped: result.smsSkipped,
+    })
+  } catch (error: any) {
+    logMain('error', 'Auto renewal reminders failed', { error: error.message })
+  } finally {
+    reminderRunInProgress = false
+  }
+}
+
+function setupAutoRenewalReminders() {
+  const run = () => {
+    try {
+      sendAutoRenewalReminders()
+    } catch (error: any) {
+      logMain('error', 'Auto reminder tick failed', { error: error.message })
+    }
+  }
+  // Check every minute so no timer alignment is needed
+  setInterval(run, 60 * 1000)
+  // Also run once shortly after startup (in case the app was opened at the scheduled hour)
+  setTimeout(run, 10 * 1000)
 }
 
 // ── Automated end-of-day report email ──
@@ -3544,6 +3607,8 @@ app.whenReady().then(async () => {
     console.log('Auto-backup scheduler started')
     setupAutoReport()
     console.log('Auto-report scheduler started')
+    setupAutoRenewalReminders()
+    console.log('Auto-renewal-reminder scheduler started')
     // Cloud SMS (PhilSMS): delivery queue worker + periodic gateway verification
     if (db) {
       sms.startSmsQueueWorker(db)

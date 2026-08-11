@@ -31,6 +31,8 @@ interface SettingsState {
   reportOwnerEmail: string
   autoReportEnabled: boolean
   autoReportHour: number
+  autoRemindersEnabled: boolean
+  reminderHour: number
   welcomeEmailEnabled: boolean
   receiptEmailEnabled: boolean
   theme: 'dark' | 'light'
@@ -101,6 +103,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     reportOwnerEmail: '',
     autoReportEnabled: false,
     autoReportHour: 23,
+    autoRemindersEnabled: false,
+    reminderHour: 9,
     welcomeEmailEnabled: false,
     receiptEmailEnabled: false,
     theme: 'dark',
@@ -208,6 +212,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.reportOwnerEmail) setSettings(prev => ({ ...prev, reportOwnerEmail: data.reportOwnerEmail }))
       if (data.autoReportEnabled) setSettings(prev => ({ ...prev, autoReportEnabled: data.autoReportEnabled === 'true' }))
       if (data.autoReportHour) setSettings(prev => ({ ...prev, autoReportHour: Number(data.autoReportHour) }))
+      if (data.autoRemindersEnabled) setSettings(prev => ({ ...prev, autoRemindersEnabled: data.autoRemindersEnabled === 'true' }))
+      if (data.reminderHour) setSettings(prev => ({ ...prev, reminderHour: Number(data.reminderHour) }))
       if (data.welcomeEmailEnabled) setSettings(prev => ({ ...prev, welcomeEmailEnabled: data.welcomeEmailEnabled === 'true' }))
       if (data.receiptEmailEnabled) setSettings(prev => ({ ...prev, receiptEmailEnabled: data.receiptEmailEnabled === 'true' }))
       if (data.theme) setSettings(prev => ({ ...prev, theme: data.theme === 'light' ? 'light' : 'dark' }))
@@ -280,6 +286,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         reportOwnerEmail: settings.reportOwnerEmail,
         autoReportEnabled: settings.autoReportEnabled.toString(),
         autoReportHour: settings.autoReportHour.toString(),
+        autoRemindersEnabled: settings.autoRemindersEnabled.toString(),
+        reminderHour: settings.reminderHour.toString(),
         welcomeEmailEnabled: settings.welcomeEmailEnabled.toString(),
         receiptEmailEnabled: settings.receiptEmailEnabled.toString(),
         theme: settings.theme,
@@ -1126,6 +1134,47 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 onChange={(e) => setSettings({ ...settings, autoReportHour: Number(e.target.value) })}
                 disabled={!settings.autoReportEnabled}
               >
+                <option value={21}>9 PM</option>
+                <option value={22}>10 PM</option>
+                <option value={23}>11 PM</option>
+                <option value={0}>12 AM</option>
+              </select>
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Auto-send Renewal Reminders</span>
+                <span className="setting-description">
+                  Email members expiring in 7 days and SMS members expiring in 3 days, once per day at the
+                  chosen hour (runs while the app is open). Each member is reminded at most once per 7 days per channel.
+                </span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.autoRemindersEnabled}
+                  onChange={(e) => setSettings({ ...settings, autoRemindersEnabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+              <div className="setting-info">
+                <span className="setting-label">Reminder Hour</span>
+                <span className="setting-description">Hour of day (24h) to send automatic renewal reminders</span>
+              </div>
+              <select
+                className="input setting-select"
+                value={settings.reminderHour}
+                onChange={(e) => setSettings({ ...settings, reminderHour: Number(e.target.value) })}
+                disabled={!settings.autoRemindersEnabled}
+              >
+                <option value={6}>6 AM</option>
+                <option value={8}>8 AM</option>
+                <option value={9}>9 AM</option>
+                <option value={10}>10 AM</option>
+                <option value={12}>12 PM</option>
+                <option value={17}>5 PM</option>
+                <option value={20}>8 PM</option>
                 <option value={21}>9 PM</option>
                 <option value={22}>10 PM</option>
                 <option value={23}>11 PM</option>
