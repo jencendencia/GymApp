@@ -1035,7 +1035,7 @@ function processAutoRenewals() {
       const start = m.plan_end
       const end = addDays(start, m.duration_days)
       // Record the renewal payment (method 'auto') and extend the plan
-      db?.prepare(`INSERT INTO payments (member_id, amount, type, plan_id, payment_method, status, note)
+      const pres = db?.prepare(`INSERT INTO payments (member_id, amount, type, plan_id, payment_method, status, note)
         VALUES (?, ?, 'renewal', ?, 'auto', 'completed', ?)`)
         .run(m.id, m.price, m.plan_id, `Auto-renewed from ${start}`)
       db?.prepare(`UPDATE members SET plan_start = ?, plan_end = ?, sessions_used = 0, status = 'active' WHERE id = ?`)
@@ -1044,6 +1044,10 @@ function processAutoRenewals() {
         VALUES ('auto_renewal', 'member', ?, ?, 'system')`)
         .run(m.id, JSON.stringify({ member_name: m.name, plan_end: end, amount: m.price }))
       logMain('info', 'Auto-renewed member', { id: m.id, name: m.name, newEnd: end })
+      // Payment receipts for auto-renewals too (email + SMS, both channel-gated)
+      if (pres?.lastInsertRowid) {
+        sendPaymentReceiptNotifications(Number(pres.lastInsertRowid)).catch(() => {})
+      }
     } catch (error: any) {
       logMain('error', 'Auto-renewal failed', { id: m.id, error: error.message })
     }
@@ -1366,17 +1370,24 @@ async function sendWelcomeEmail(memberId: number) {
   }
 }
 
+// Shared payment lookup for receipt notifications (email + SMS) — pulls the
+// member's name / email / phone and the plan name for the receipt templates.
+function getPaymentReceiptRow(paymentId: number): any {
+  return db?.prepare(`
+    SELECT p.*, m.name as member_name, m.email as member_email, m.phone as member_phone,
+           m.member_id as member_code, pl.name as plan_name
+    FROM payments p
+    JOIN members m ON p.member_id = m.id
+    LEFT JOIN plans pl ON p.plan_id = pl.id
+    WHERE p.id = ?
+  `).get(paymentId)
+}
+
 async function sendReceiptEmail(paymentId: number) {
   try {
     const enabled = db?.prepare("SELECT value FROM settings WHERE key = 'receiptEmailEnabled'").get() as any
     if (enabled?.value !== 'true') return
-    const payment = db?.prepare(`
-      SELECT p.*, m.name as member_name, m.email as member_email, m.member_id as member_code, pl.name as plan_name
-      FROM payments p
-      JOIN members m ON p.member_id = m.id
-      LEFT JOIN plans pl ON p.plan_id = pl.id
-      WHERE p.id = ?
-    `).get(paymentId) as any
+    const payment = getPaymentReceiptRow(paymentId)
     if (!payment?.member_email) return
     const { transport, fromEmail } = createSmtpTransport()
     const appNameRow = db?.prepare("SELECT value FROM settings WHERE key = 'appName'").get() as any
@@ -1405,6 +1416,20 @@ async function sendReceiptEmail(paymentId: number) {
     logMain('info', 'Receipt email sent', { paymentId, to: payment.member_email })
   } catch (error: any) {
     logMain('warn', 'Receipt email not sent (SMTP unconfigured or failed)', { paymentId, error: error.message })
+  }
+}
+
+// Fire the payment-receipt notifications after a payment is recorded:
+//   • Email — SMTP-setting-gated (Settings → Email → Receipt Email)
+//   • SMS — queued through the same worker as renewal reminders, gated on the
+//     SMS delivery channel (Settings → SMS). Never throws; failures are logged.
+async function sendPaymentReceiptNotifications(paymentId: number) {
+  await sendReceiptEmail(paymentId)
+  try {
+    const row = getPaymentReceiptRow(paymentId)
+    if (row) sms.queuePaymentReceiptSms(row)
+  } catch (error: any) {
+    logMain('warn', 'Receipt SMS queue failed', { paymentId, error: error.message })
   }
 }
 
@@ -2020,18 +2045,6 @@ function setupIPC() {
 
       broadcastDataChanged(event.sender)
 
-      // Cloud SMS (PhilSMS): queue a check-in alert to the member's phone when
-      // SMS delivery is enabled and the member has a Philippine mobile number.
-      // Only real entries (success / staff override) alert — failed scan rows
-      // are diagnostic and never message the member.
-      if (checkin.status !== 'failed') {
-        try {
-          sms.queueCheckinSms(member)
-        } catch (error: any) {
-          logMain('warn', 'Check-in SMS queue failed', { memberId: checkin.member_id, error: error.message })
-        }
-      }
-
       return { success: true, id: res?.lastInsertRowid }
     } catch (error: any) {
       console.error('create-checkin error:', error)
@@ -2203,9 +2216,10 @@ function setupIPC() {
       payment.transaction_ref || null,
       payment.staff_id || null
     )
-    // P2 5.5: fire-and-forget receipt email (setting-gated, SMTP optional)
+    // Payment receipts — email (SMTP-setting-gated) + SMS (queued via the SMS
+    // worker; gated on the delivery channel in Settings → SMS)
     if (res?.lastInsertRowid) {
-      sendReceiptEmail(Number(res.lastInsertRowid)).catch(() => {})
+      sendPaymentReceiptNotifications(Number(res.lastInsertRowid)).catch(() => {})
     }
     broadcastDataChanged(event.sender)
     return res

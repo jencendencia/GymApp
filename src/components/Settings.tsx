@@ -39,8 +39,8 @@ interface SettingsState {
   cloudProvider: string
   cloudApiKey: string
   cloudSender: string
-  smsTemplate: string
   renewalSmsTemplate: string
+  receiptSmsTemplate: string
 }
 
 type UpdateStatusState =
@@ -59,12 +59,12 @@ type BannerState =
   | { type: 'error'; message: string }
   | { type: 'loading'; message: string }
 
-// Default SMS message template (PHILSMS_SETUP_GUIDE.md placeholders).
-// {{flag}} renders LATE/EARLY on flagged scans; empty when not applicable.
-const DEFAULT_SMS_TEMPLATE = 'Welcome to {{gym}}, {{name}}! You checked {{action}} at {{time}}. Enjoy your workout!'
 // Default renewal-reminder SMS (sent from Reports → Send Reminders to members
 // expiring within 3 days). Keep ASCII — Unicode messages cost 2 credits.
 const DEFAULT_SMS_RENEWAL_TEMPLATE = 'Hi {{name}}, your {{plan}} membership at {{gym}} expires on {{date}} ({{days}} days left). Renew to keep your workouts going!'
+// Default payment-receipt SMS (sent automatically after every payment — new
+// plan, renewal, top-up, auto-renewal). Keep ASCII — Unicode costs 2 credits.
+const DEFAULT_SMS_RECEIPT_TEMPLATE = 'Hi {{name}}, payment received: {{amount}} ({{method}}). Thank you! - {{gym}}'
 
 const DEFAULT_WAIVER_TEMPLATE: WaiverTemplate = {
   id: 1,
@@ -108,8 +108,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     cloudProvider: 'philsms',
     cloudApiKey: '',
     cloudSender: '',
-    smsTemplate: DEFAULT_SMS_TEMPLATE,
     renewalSmsTemplate: DEFAULT_SMS_RENEWAL_TEMPLATE,
+    receiptSmsTemplate: DEFAULT_SMS_RECEIPT_TEMPLATE,
   })
   const [saved, setSaved] = useState(false)
   const [scannerChecking, setScannerChecking] = useState(false)
@@ -216,8 +216,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.cloudProvider) setSettings(prev => ({ ...prev, cloudProvider: data.cloudProvider }))
       if (data.cloudApiKey) setSettings(prev => ({ ...prev, cloudApiKey: data.cloudApiKey }))
       if (data.cloudSender) setSettings(prev => ({ ...prev, cloudSender: data.cloudSender }))
-      if (data.smsTemplate) setSettings(prev => ({ ...prev, smsTemplate: data.smsTemplate }))
       if (data.renewalSmsTemplate) setSettings(prev => ({ ...prev, renewalSmsTemplate: data.renewalSmsTemplate }))
+      if (data.receiptSmsTemplate) setSettings(prev => ({ ...prev, receiptSmsTemplate: data.receiptSmsTemplate }))
       if (data.waiverTemplates) {
         try {
           const parsed = JSON.parse(data.waiverTemplates) as WaiverTemplate[]
@@ -288,8 +288,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         cloudProvider: settings.cloudProvider,
         cloudApiKey: settings.cloudApiKey,
         cloudSender: settings.cloudSender,
-        smsTemplate: settings.smsTemplate || DEFAULT_SMS_TEMPLATE,
         renewalSmsTemplate: settings.renewalSmsTemplate || DEFAULT_SMS_RENEWAL_TEMPLATE,
+        receiptSmsTemplate: settings.receiptSmsTemplate || DEFAULT_SMS_RECEIPT_TEMPLATE,
       })
       setSaved(true)
       // If a valid password was just saved, clear the undecryptable warning
@@ -1270,22 +1270,6 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
 
             <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20, flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
               <div className="setting-info">
-                <span className="setting-label">SMS Message Template</span>
-                <span className="setting-description">
-                  Sent to members on check-in. Placeholders: {'{{gym}}'} {'{{name}}'} {'{{section}}'} {'{{action}}'} {'{{time}}'} {'{{flag}}'}
-                </span>
-              </div>
-              <textarea
-                className="input"
-                rows={3}
-                value={settings.smsTemplate}
-                onChange={(e) => setSettings({ ...settings, smsTemplate: e.target.value })}
-                style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
-              />
-            </div>
-
-            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20, flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
-              <div className="setting-info">
                 <span className="setting-label">Renewal Reminder SMS Template</span>
                 <span className="setting-description">
                   Sent from <strong>Reports → Send Reminders</strong> to members expiring within 3 days.
@@ -1297,6 +1281,23 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 rows={3}
                 value={settings.renewalSmsTemplate}
                 onChange={(e) => setSettings({ ...settings, renewalSmsTemplate: e.target.value })}
+                style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
+              />
+            </div>
+
+            <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20, flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+              <div className="setting-info">
+                <span className="setting-label">Payment Receipt SMS Template</span>
+                <span className="setting-description">
+                  Sent automatically to the member after every payment (new plan, renewal, top-up, auto-renewal).
+                  Placeholders: {'{{gym}}'} {'{{name}}'} {'{{amount}}'} {'{{method}}'} {'{{type}}'} {'{{plan}}'} {'{{date}}'} {'{{ref}}'}
+                </span>
+              </div>
+              <textarea
+                className="input"
+                rows={3}
+                value={settings.receiptSmsTemplate}
+                onChange={(e) => setSettings({ ...settings, receiptSmsTemplate: e.target.value })}
                 style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
               />
             </div>
@@ -1325,7 +1326,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Send Test SMS</span>
                 <span className="setting-description">
-                  Send a sample message (using the template above) to a Philippine mobile number, e.g. 09171234567
+                  Send a sample message to a Philippine mobile number to test the gateway, e.g. 09171234567
                 </span>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>

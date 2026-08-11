@@ -14,12 +14,14 @@
 //           type: "plain"|"unicode", message: "…" }
 //
 // Settings keys (all stored in the `settings` table):
-//   smsChannel    'off' | 'simulator' | 'cloud'
-//   cloudProvider 'philsms' (only provider today)
-//   cloudApiKey   PhilSMS API token (stored encrypted — in SECRET_KEYS)
-//   cloudSender   Sender ID (<= 11 chars, alphanumeric)
-//   smsTemplate   Message template with {{gym}} {{name}} {{section}}
-//                 {{action}} {{time}} {{flag}} placeholders
+//   smsChannel          'off' | 'simulator' | 'cloud'
+//   cloudProvider       'philsms' (only provider today)
+//   cloudApiKey         PhilSMS API token (stored encrypted — in SECRET_KEYS)
+//   cloudSender         Sender ID (<= 11 chars, alphanumeric)
+//   renewalSmsTemplate  Renewal-reminder template ({{gym}} {{name}} {{plan}}
+//                       {{date}} {{days}})
+//   receiptSmsTemplate  Payment-receipt template ({{gym}} {{name}} {{amount}}
+//                       {{method}} {{type}} {{plan}} {{date}} {{ref}})
 //
 // Phone numbers are normalized automatically: 09171234567 → 639171234567.
 
@@ -39,11 +41,15 @@ const REQUEST_TIMEOUT_MS = 10000
 const VERIFY_INTERVAL_MS = 60 * 1000
 const VERIFY_FIRST_DELAY_MS = 3000
 
-export const SMS_DEFAULT_TEMPLATE = 'Welcome to {{gym}}, {{name}}! You checked {{action}} at {{time}}. Enjoy your workout!'
 // Renewal-reminder SMS (manual run from Reports). Keep ASCII so each message
 // costs 1 credit and passes telco filters. Placeholders: {{gym}} {{name}}
 // {{plan}} {{date}} {{days}}.
 export const SMS_RENEWAL_DEFAULT_TEMPLATE = 'Hi {{name}}, your {{plan}} membership at {{gym}} expires on {{date}} ({{days}} days left). Renew to keep your workouts going!'
+// Payment-receipt SMS (queued automatically after every payment — Settings →
+// SMS → Payment Receipt SMS Template). Keep ASCII so each message costs 1
+// credit and passes telco filters. Placeholders: {{gym}} {{name}} {{amount}}
+// {{method}} {{type}} {{plan}} {{date}} {{ref}}.
+export const SMS_RECEIPT_DEFAULT_TEMPLATE = 'Hi {{name}}, payment received: {{amount}} ({{method}}). Thank you! - {{gym}}'
 
 export interface SmsLogRow {
   id: number
@@ -73,7 +79,6 @@ interface SmsConfig {
   provider: string
   apiKey: string
   sender: string
-  template: string
 }
 
 let dbRef: Database.Database | null = null
@@ -110,7 +115,6 @@ export function getSmsConfig(): SmsConfig {
     provider: getSetting('cloudProvider') || 'philsms',
     apiKey: getSetting('cloudApiKey') || '',
     sender: getSetting('cloudSender') || '',
-    template: getSetting('smsTemplate') || SMS_DEFAULT_TEMPLATE,
   }
 }
 
@@ -150,6 +154,10 @@ export function renderSmsTemplate(template: string, vars: Record<string, string>
     '{{plan}}': vars.plan ?? '',
     '{{date}}': vars.date ?? '',
     '{{days}}': vars.days ?? '',
+    '{{amount}}': vars.amount ?? '',
+    '{{method}}': vars.method ?? '',
+    '{{type}}': vars.type ?? '',
+    '{{ref}}': vars.ref ?? '',
   }
   let out = template
   for (const [token, value] of Object.entries(tokens)) {
@@ -164,13 +172,6 @@ export function resolveSender(sender: string, schoolName: string): string {
   if (cleaned) return cleaned.slice(0, 11)
   const fallback = (schoolName || 'REPCHECK').trim().slice(0, 11)
   return fallback || 'PhilSMS'
-}
-
-/** Format a timestamp for the {{time}} placeholder (e.g. "4:32 PM"). */
-export function formatSmsTime(iso: string | Date): string {
-  const d = typeof iso === 'string' ? new Date(iso) : iso
-  if (isNaN(d.getTime())) return ''
-  return d.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })
 }
 
 // ── Low-level API calls (net.fetch + timeout) ──
@@ -444,7 +445,7 @@ export function queueSms(payload: { recipient: string; message: string; senderId
  * Queue a renewal-reminder SMS for a member (manual run from Reports →
  * "Send Reminders"). Targets members expiring within 3 days (the 3/1-day
  * escalation window); the actual send happens via the queue worker, so
- * retries, the simulator, and the outbox all behave like check-in SMS.
+ * retries, the simulator, and the outbox all behave like the SMS queue.
  * Gated on the delivery channel; returns the sms_logs id or null when
  * skipped (no phone / channel off / empty message).
  */
@@ -474,21 +475,46 @@ export function queueRenewalSms(
   return queueSms({ recipient, message })
 }
 
-/** Queue the check-in alert SMS for a member (gated on the delivery channel). */
-export function queueCheckinSms(member: { id: number; name: string; phone?: string | null; member_id?: string | null }): number | null {
+/**
+ * Queue a payment-receipt SMS for a member (automatic — fired right after a
+ * payment is recorded: new plan, renewal, top-up, and auto-renewal). Gated on
+ * the delivery channel; the actual send happens via the queue worker, so
+ * retries, the simulator, and the outbox all behave like the SMS queue.
+ * Returns the sms_logs id or null when skipped (no phone / channel off /
+ * empty message). Amount/method are pre-formatted; the member row is expected
+ * to carry `name` / `phone` / `plan_name` (see getPaymentReceiptRow in main).
+ */
+export function queuePaymentReceiptSms(payment: {
+  amount?: number
+  type?: string
+  payment_method?: string | null
+  transaction_ref?: string | null
+  plan_name?: string | null
+  member_name?: string | null
+  member_phone?: string | null
+}): number | null {
   if (!dbRef) return null
   const cfg = getSmsConfig()
   if (cfg.channel === 'off') return null
-  const recipient = normalizePhPhone(member.phone)
+  // Fields come from getPaymentReceiptRow in main (member columns aliased as
+  // member_name / member_phone), matching sendReceiptEmail's row shape.
+  const recipient = normalizePhPhone(payment.member_phone)
   if (!recipient) return null
   const school = getSetting('appName') || 'REPCHECK'
-  const message = renderSmsTemplate(cfg.template, {
+  const template = getSetting('receiptSmsTemplate') || SMS_RECEIPT_DEFAULT_TEMPLATE
+  const amountLabel = Number(payment.amount || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const methodLabel = (payment.payment_method || 'cash').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const typeLabel = payment.type === 'new_plan' ? 'New Plan' : payment.type === 'renewal' ? 'Renewal' : 'Top Up'
+  const dateLabel = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const message = renderSmsTemplate(template, {
     school,
-    name: member.name,
-    section: '',
-    action: 'IN',
-    time: formatSmsTime(new Date()),
-    flag: '',
+    name: payment.member_name || '',
+    amount: amountLabel,
+    method: methodLabel,
+    type: typeLabel,
+    plan: payment.plan_name || '',
+    date: dateLabel,
+    ref: payment.transaction_ref || '',
   })
   if (!message) return null
   return queueSms({ recipient, message })
@@ -631,14 +657,9 @@ export async function sendTestSms(recipientRaw: string): Promise<{ success: bool
     return { success: false, message: 'SMS delivery is off — enable Simulator or Cloud SMS first' }
   }
   const school = getSetting('appName') || 'REPCHECK'
-  const message = renderSmsTemplate(cfg.template, {
-    school,
-    name: 'Test Member',
-    section: '',
-    action: 'IN',
-    time: formatSmsTime(new Date()),
-    flag: '',
-  })
+  // Fixed gateway test message — SMS is used for renewal reminders and payment
+  // receipts only, so the check does not depend on any message template.
+  const message = `This is a test SMS from ${school}. Your SMS gateway is working!`
   // Send synchronously, then log the row with its FINAL status (never re-queued,
   // so a successful test isn't sent twice by the worker).
   const result = await sendSmsNow(recipient, message)
