@@ -71,6 +71,10 @@ jobs:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    # Creating releases and uploading assets via the GitHub API requires write
+    # access to contents (the repo default GITHUB_TOKEN is read-only).
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
