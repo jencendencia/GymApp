@@ -35,6 +35,7 @@ const isKioskMode = () => {
 
 function App() {
   const [activated, setActivated] = useState<boolean | null>(null)
+  const [activationMessage, setActivationMessage] = useState('')
   const [loggedInUser, setLoggedInUser] = useState<StaffUser | null>(null)
   const [activeScreen, setActiveScreen] = useState<Screen>('kiosk')
   const [appName, setAppName] = useState('REPCHECK')
@@ -116,11 +117,8 @@ function App() {
   const checkActivation = async () => {
     try {
       const info = await window.electronAPI.getLicenseInfo()
-      if (info.activated) {
-        setActivated(true)
-      } else {
-        setActivated(false)
-      }
+      setActivated(info.activated)
+      if (!info.activated && info.message) setActivationMessage(info.message)
     } catch {
       // If electronAPI not available, assume activated (e.g. in browser dev mode)
       setActivated(true)
@@ -261,7 +259,7 @@ function App() {
     return (
       <SettingsProvider>
         <div className="app">
-          <Activation />
+          <Activation initialMessage={activationMessage} />
         </div>
       </SettingsProvider>
     )

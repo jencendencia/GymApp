@@ -2970,6 +2970,10 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
   })
 
   // ── License Activation ──
+  // How long an activated app may run without reaching the license server.
+  const OFFLINE_GRACE_DAYS = 3
+  const OFFLINE_GRACE_MS = OFFLINE_GRACE_DAYS * 24 * 60 * 60 * 1000
+
   ipcMain.handle('validate-license', async (_, licenseKey: string) => {
     try {
       const machineId = getMachineId()
@@ -2984,8 +2988,11 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
 
       if (data.valid) {
         // Save license info to settings
+        const now = new Date().toISOString()
         db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('license_key', licenseKey)
         db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('machine_id', machineId)
+        db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('activated_at', now)
+        db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('last_validated_at', now)
         return { valid: true, message: data.message || 'License activated successfully!' }
       }
 
@@ -3003,10 +3010,61 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
 
       const currentMachineId = getMachineId()
 
+      // No license stored, or this machine isn't the one the key was activated on
+      if (!keyRow?.value || machineRow?.value !== currentMachineId) {
+        return { activated: false, machineId: currentMachineId, storedMachineId: machineRow?.value || null }
+      }
+
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 8000)
+
+      let data: { valid?: boolean; message?: string } = {}
+      try {
+        // Re-validate the key on every launch so revoked keys lock the app out.
+        const response = await fetch('https://dtr-license-server.jencendencia.workers.dev/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: keyRow.value, machineId: machineRow.value }),
+          signal: controller.signal,
+        })
+        data = await response.json() as { valid: boolean; message: string }
+      } catch {
+        // No server response (offline / timed out): allow within the grace period.
+        // If this is the first launch since the app update, start the grace window
+        // now so existing clients are never locked out the moment they update.
+        const lastRow = db?.prepare('SELECT value FROM settings WHERE key = ?').get('last_validated_at') as any
+        const lastValidated = lastRow?.value ? new Date(lastRow.value).getTime() : Date.now()
+        if (Date.now() - lastValidated < OFFLINE_GRACE_MS) {
+          // Stamp once only when the reference is missing (first launch after the
+          // update) — otherwise the grace window would slide forever for clients
+          // who open the app offline regularly, and they'd never be locked out.
+          if (!lastRow?.value) {
+            db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('last_validated_at', new Date().toISOString())
+          }
+          return { activated: true, machineId: currentMachineId, storedMachineId: machineRow.value }
+        }
+        return {
+          activated: false,
+          machineId: currentMachineId,
+          storedMachineId: machineRow.value,
+          message: 'Cannot reach the activation server and the offline grace period has expired. Please check your internet connection.',
+        }
+      } finally {
+        clearTimeout(timeout)
+      }
+
+      if (data.valid) {
+        // Refresh the offline-grace timestamp so paying clients stay unlocked.
+        db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('last_validated_at', new Date().toISOString())
+        return { activated: true, machineId: currentMachineId, storedMachineId: machineRow.value }
+      }
+
+      // Server reached and rejected this key (revoked / expired / over device limit)
       return {
-        activated: !!(keyRow?.value && machineRow?.value === currentMachineId),
+        activated: false,
         machineId: currentMachineId,
-        storedMachineId: machineRow?.value || null,
+        storedMachineId: machineRow.value,
+        message: data.message || 'This license key is no longer valid.',
       }
     } catch (error) {
       return { activated: false, machineId: null, storedMachineId: null }

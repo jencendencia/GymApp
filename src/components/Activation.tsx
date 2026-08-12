@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import './Activation.css'
 
-function Activation() {
+function Activation({ initialMessage = '' }: { initialMessage?: string }) {
   const [licenseKey, setLicenseKey] = useState('')
-  const [status, setStatus] = useState<'idle' | 'validating' | 'success' | 'error'>('idle')
-  const [message, setMessage] = useState('')
+  const [status, setStatus] = useState<'idle' | 'validating' | 'success' | 'error'>(initialMessage ? 'error' : 'idle')
+  const [message, setMessage] = useState(initialMessage)
   const [appName, setAppName] = useState('REPCHECK')
   const [appLogo, setAppLogo] = useState('')
 
@@ -89,7 +89,10 @@ function Activation() {
             className="activation-input"
             placeholder="Enter your license key"
             value={licenseKey}
-            onChange={e => setLicenseKey(e.target.value)}
+            onChange={e => {
+              setLicenseKey(e.target.value)
+              if (message) setMessage('')
+            }}
             onKeyDown={handleKeyDown}
             disabled={status === 'validating'}
             autoFocus

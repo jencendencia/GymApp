@@ -145,7 +145,7 @@ export interface ElectronAPI {
 
   // License Activation
   validateLicense: (key: string) => Promise<{ valid: boolean; message: string }>
-  getLicenseInfo: () => Promise<{ activated: boolean; machineId: string | null; storedMachineId: string | null }>
+  getLicenseInfo: () => Promise<{ activated: boolean; machineId: string | null; storedMachineId: string | null; message?: string }>
 
   // Auto-update
   checkForUpdates: () => Promise<{ status: string; message?: string }>
