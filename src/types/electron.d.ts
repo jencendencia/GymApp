@@ -165,6 +165,7 @@ export interface Coach {
   phone?: string
   specialty?: string
   professional_fee?: number
+  professional_fee_daily?: number
   created_at: string
 }
 
@@ -174,6 +175,7 @@ export interface CreateCoachInput {
   phone?: string
   specialty?: string
   professional_fee?: number
+  professional_fee_daily?: number
 }
 
 export interface SmsLog {
@@ -223,6 +225,7 @@ export interface Member {
   coach_id?: number
   coaching_start?: string
   coaching_end?: string
+  coach_fee_type?: 'monthly' | 'daily'
   sessions_used: number
   balance: number
   status: 'active' | 'inactive' | 'expired'
@@ -264,6 +267,7 @@ export interface CreateMemberInput {
   coach_id?: number
   coaching_start?: string
   coaching_end?: string
+  coach_fee_type?: 'monthly' | 'daily'
   balance?: number
   waiver_agreed_at?: string
   waiver_template_id?: number
@@ -288,6 +292,7 @@ export interface UpdateMemberInput {
   coach_id?: number
   coaching_start?: string
   coaching_end?: string
+  coach_fee_type?: 'monthly' | 'daily'
   balance?: number
   status?: 'active' | 'inactive' | 'expired'
   waiver_agreed_at?: string

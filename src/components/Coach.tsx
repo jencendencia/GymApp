@@ -27,6 +27,7 @@ function Coach() {
     coach_id: 0,
     coaching_start: todayLocal(),
     coaching_end: '',
+    fee_type: 'monthly' as 'monthly' | 'daily',
     record_payment: false,
     payment_amount: '',
     payment_notes: '',
@@ -53,6 +54,7 @@ function Coach() {
     phone: '',
     specialty: '',
     professional_fee: '',
+    professional_fee_daily: '',
   })
 
   useEffect(() => {
@@ -103,7 +105,7 @@ function Coach() {
   }
 
   const resetCoachForm = () => {
-    setCoachForm({ name: '', email: '', phone: '', specialty: '', professional_fee: '' })
+    setCoachForm({ name: '', email: '', phone: '', specialty: '', professional_fee: '', professional_fee_daily: '' })
     setSelectedCoach(null)
   }
 
@@ -115,6 +117,7 @@ function Coach() {
       phone: coach.phone || '',
       specialty: coach.specialty || '',
       professional_fee: coach.professional_fee ? String(coach.professional_fee) : '',
+      professional_fee_daily: coach.professional_fee_daily ? String(coach.professional_fee_daily) : '',
     })
     setShowCoachForm(true)
   }
@@ -124,6 +127,7 @@ function Coach() {
       const payload = {
         ...coachForm,
         professional_fee: coachForm.professional_fee ? Number(coachForm.professional_fee) : 0,
+        professional_fee_daily: coachForm.professional_fee_daily ? Number(coachForm.professional_fee_daily) : 0,
       }
       if (selectedCoach) {
         await window.electronAPI.updateCoach(selectedCoach.id, payload)
@@ -271,6 +275,7 @@ const handleRecordFeePayment = async () => {
         coach_id: enrollForm.coach_id,
         coaching_start: enrollForm.coaching_start || undefined,
         coaching_end: enrollForm.coaching_end || undefined,
+        coach_fee_type: enrollForm.fee_type,
         balance: enrollMember.balance || 0,
         status: enrollMember.status,
       })
@@ -305,6 +310,7 @@ const handleRecordFeePayment = async () => {
         coach_id: 0,
         coaching_start: todayLocal(),
         coaching_end: '',
+        fee_type: 'monthly',
         record_payment: false,
         payment_amount: '',
         payment_notes: '',
@@ -329,6 +335,7 @@ const handleRecordFeePayment = async () => {
       coach_id: 0,
       coaching_start: today,
       coaching_end: addOneMonth(today),
+      fee_type: 'monthly',
       record_payment: false,
       payment_amount: '',
       payment_notes: '',
@@ -387,14 +394,15 @@ const handleRecordFeePayment = async () => {
                 <tr>
                   <th>Name</th>
                   <th>Specialty</th>
-                  <th>Professional Fee</th>
+                  <th>Monthly Fee</th>
+                  <th>Daily Fee</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {coaches.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="empty-row">No coaches registered yet</td>
+                    <td colSpan={5} className="empty-row">No coaches registered yet</td>
                   </tr>
                 ) : (
                   coaches.map((coach) => {
@@ -404,6 +412,9 @@ const handleRecordFeePayment = async () => {
                         <td>{coach.specialty || '—'}</td>
                         <td className="mono-text">
                           {coach.professional_fee ? formatMoney(coach.professional_fee) : '—'}
+                        </td>
+                        <td className="mono-text">
+                          {coach.professional_fee_daily ? formatMoney(coach.professional_fee_daily) : '—'}
                         </td>
                         <td>
                           <div className="coach-actions">
@@ -719,13 +730,25 @@ const handleRecordFeePayment = async () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Professional Fee</label>
+                  <label>Monthly Fee</label>
                   <input
                     type="number"
                     className="input"
                     value={coachForm.professional_fee}
                     onChange={(e) => setCoachForm({ ...coachForm, professional_fee: e.target.value })}
                     placeholder="e.g. 1500"
+                    step="0.01"
+                    min="0"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Daily Fee</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={coachForm.professional_fee_daily}
+                    onChange={(e) => setCoachForm({ ...coachForm, professional_fee_daily: e.target.value })}
+                    placeholder="e.g. 500"
                     step="0.01"
                     min="0"
                   />
@@ -887,18 +910,35 @@ const handleRecordFeePayment = async () => {
                   </select>
                   {enrollForm.coach_id > 0 && (() => {
                     const selectedCoach = coaches.find(c => c.id === enrollForm.coach_id)
-                    return selectedCoach?.professional_fee ? (
+                    return selectedCoach ? (
                       <div className="enroll-coach-fee-display">
-                        <span className="enroll-coach-fee-label">Professional Fee</span>
-                        <span className="enroll-coach-fee-amount">{formatMoney(selectedCoach.professional_fee)}</span>
-                      </div>
-                    ) : selectedCoach ? (
-                      <div className="enroll-coach-fee-display">
-                        <span className="enroll-coach-fee-label">Professional Fee</span>
-                        <span className="enroll-coach-fee-none">No fee set</span>
+                        <span className="enroll-coach-fee-label">Monthly Fee</span>
+                        <span className="enroll-coach-fee-amount">{selectedCoach.professional_fee ? formatMoney(selectedCoach.professional_fee) : '—'}</span>
                       </div>
                     ) : null
                   })()}
+                  {enrollForm.coach_id > 0 && (() => {
+                    const selectedCoach = coaches.find(c => c.id === enrollForm.coach_id)
+                    return selectedCoach ? (
+                      <div className="enroll-coach-fee-display" style={{ marginTop: 4 }}>
+                        <span className="enroll-coach-fee-label">Daily Fee</span>
+                        <span className="enroll-coach-fee-amount">{selectedCoach.professional_fee_daily ? formatMoney(selectedCoach.professional_fee_daily) : '—'}</span>
+                      </div>
+                    ) : null
+                  })()}
+                  {enrollForm.coach_id > 0 && (
+                    <div className="form-group" style={{ marginTop: 8 }}>
+                      <label>Fee Type *</label>
+                      <select
+                        className="input"
+                        value={enrollForm.fee_type}
+                        onChange={(e) => setEnrollForm({ ...enrollForm, fee_type: e.target.value as 'monthly' | 'daily' })}
+                      >
+                        <option value="monthly">Monthly</option>
+                        <option value="daily">Daily</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>Coaching Start</label>
@@ -935,10 +975,11 @@ const handleRecordFeePayment = async () => {
                     className="btn btn-primary btn-sm"
                     onClick={() => {
                       const coach = coaches.find(c => c.id === enrollForm.coach_id)
+                      const fee = enrollForm.fee_type === 'daily' ? coach?.professional_fee_daily : coach?.professional_fee
                       setEnrollForm({
                         ...enrollForm,
                         record_payment: true,
-                        payment_amount: coach?.professional_fee ? String(coach.professional_fee) : ''
+                        payment_amount: fee ? String(fee) : ''
                       })
                     }}
                     disabled={enrollForm.record_payment}

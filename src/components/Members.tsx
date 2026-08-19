@@ -132,6 +132,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     coach_id: 0,
     coaching_start: '',
     coaching_end: '',
+    coach_fee_type: 'monthly',
     balance: 0,
     status: 'active',
     photo: '',
@@ -444,6 +445,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coach_id: formData.coach_id || undefined,
         coaching_start: formData.coaching_start || undefined,
         coaching_end: formData.coaching_end || undefined,
+        coach_fee_type: formData.coach_fee_type || 'monthly',
         balance: formData.balance || 0,
         waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
         waiver_template_id: waiverAgreed ? (selectedWaiverTemplateId ?? undefined) : undefined,
@@ -519,7 +521,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         // in the Coaches page collected totals (only the portion this payment covers)
         if (formData.coach_id > 0) {
           const coach = coaches.find(c => c.id === formData.coach_id)
-          const coachFee = coach?.professional_fee || 0
+          const coachFee = formData.coach_fee_type === 'daily'
+            ? (coach?.professional_fee_daily || 0)
+            : (coach?.professional_fee || 0)
           const planPrice = plans.find(p => p.id === formData.plan_id)?.price || 0
           const feeCollected = Math.max(0, Math.min(coachFee, payAmount - planPrice))
           if (coach && feeCollected > 0) {
@@ -565,6 +569,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         coach_id: formData.coach_id || undefined,
         coaching_start: formData.coaching_start || undefined,
         coaching_end: formData.coaching_end || undefined,
+        coach_fee_type: formData.coach_fee_type || 'monthly',
         balance: formData.balance || 0,
         status: formData.status,
         waiver_agreed_at: waiverAgreedAt || undefined,
@@ -692,6 +697,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       coach_id: 0,
       coaching_start: '',
       coaching_end: '',
+      coach_fee_type: 'monthly',
       balance: 0,
       status: 'active',
       photo: '',
@@ -865,6 +871,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       coach_id: member.coach_id || 0,
       coaching_start: member.coaching_start || '',
       coaching_end: member.coaching_end || '',
+      coach_fee_type: (member.coach_fee_type as 'monthly' | 'daily') || 'monthly',
       balance: member.balance || 0,
       status: member.status,
       photo: member.photo || '',
@@ -1339,6 +1346,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       {showDailyForm && (
         <DailyMemberModal
           plans={plans}
+          coaches={coaches}
           waiverTemplates={waiverTemplates}
           captureFinger={captureFingerOnce}
           onCreated={() => {

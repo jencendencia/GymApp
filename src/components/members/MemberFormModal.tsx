@@ -29,6 +29,7 @@ export interface MemberFormData {
   photo: string
   /** Member who referred this new member (0 = none) — they earn 20 points (P2 5.8). */
   referrer_id: number
+  coach_fee_type: 'monthly' | 'daily'
 }
 
 export interface PaymentFormData {
@@ -387,7 +388,10 @@ function MemberFormModal(props: MemberFormModalProps) {
                           const plan = plans.find(p => p.id === planId)
                           const prevPlan = plans.find(p => p.id === formData.plan_id)
                           // Keep the selected coach's professional fee in the auto-filled total
-                          const coachFee = formData.coach_id > 0 ? (coaches.find(c => c.id === formData.coach_id)?.professional_fee || 0) : 0
+                          const selectedCoachForFee = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
+                          const coachFee = formData.coach_id > 0
+                            ? (formData.coach_fee_type === 'daily' ? (selectedCoachForFee?.professional_fee_daily || 0) : (selectedCoachForFee?.professional_fee || 0))
+                            : 0
                           // Plan dates follow the plan: end = start + duration_days
                           // (per-session passes = +1 day; multi-session packs = no end
                           // date). Start defaults to today when not yet set.
@@ -495,8 +499,12 @@ function MemberFormModal(props: MemberFormModalProps) {
                           const cid = Number(e.target.value)
                           const newCoach = cid > 0 ? coaches.find(c => c.id === cid) : undefined
                           const oldCoach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
-                          const newFee = newCoach?.professional_fee || 0
-                          const oldFee = oldCoach?.professional_fee || 0
+                          const newFee = formData.coach_fee_type === 'daily'
+                            ? (newCoach?.professional_fee_daily || 0)
+                            : (newCoach?.professional_fee || 0)
+                          const oldFee = formData.coach_fee_type === 'daily'
+                            ? (oldCoach?.professional_fee_daily || 0)
+                            : (oldCoach?.professional_fee || 0)
                           setFormData({
                             coach_id: cid,
                             // Auto-fill coaching dates from the plan dates when a coach is picked
@@ -525,7 +533,7 @@ function MemberFormModal(props: MemberFormModalProps) {
                         if (!selectedCoach) return null
                         return (
                           <div className="member-coach-fee-display">
-                            <span className="member-coach-fee-label">Professional Fee</span>
+                            <span className="member-coach-fee-label">Monthly Fee</span>
                             {selectedCoach.professional_fee ? (
                               <span className="member-coach-fee-amount">{formatMoney(selectedCoach.professional_fee)}</span>
                             ) : (
@@ -534,7 +542,53 @@ function MemberFormModal(props: MemberFormModalProps) {
                           </div>
                         )
                       })()}
+                      {formData.coach_id > 0 && (() => {
+                        const selectedCoach = coaches.find(c => c.id === formData.coach_id)
+                        if (!selectedCoach) return null
+                        return (
+                          <div className="member-coach-fee-display" style={{ marginTop: 4 }}>
+                            <span className="member-coach-fee-label">Daily Fee</span>
+                            {selectedCoach.professional_fee_daily ? (
+                              <span className="member-coach-fee-amount">{formatMoney(selectedCoach.professional_fee_daily)}</span>
+                            ) : (
+                              <span className="member-coach-fee-none">No fee set</span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </div>
+                    {formData.coach_id > 0 && (
+                      <div className="form-group">
+                        <label>Fee Type *</label>
+                        <select
+                          className="input"
+                          value={formData.coach_fee_type}
+                          onChange={(e) => {
+                            const newType = e.target.value as 'monthly' | 'daily'
+                            const selectedCoach = coaches.find(c => c.id === formData.coach_id)
+                            const newFee = newType === 'daily'
+                              ? (selectedCoach?.professional_fee_daily || 0)
+                              : (selectedCoach?.professional_fee || 0)
+                            const oldFee = formData.coach_fee_type === 'daily'
+                              ? (selectedCoach?.professional_fee_daily || 0)
+                              : (selectedCoach?.professional_fee || 0)
+                            setFormData({ ...formData, coach_fee_type: newType })
+                            onPaymentFormChange((prev) => {
+                              const plan = plans.find(p => p.id === formData.plan_id)
+                              const planPrice = plan?.price || 0
+                              const wasAutoFilled = prev.amount === planPrice + oldFee
+                              if (prev.amount <= 0 || wasAutoFilled) {
+                                return { ...prev, amount: Math.max(0, planPrice + newFee) }
+                              }
+                              return prev
+                            })
+                          }}
+                        >
+                          <option value="monthly">Monthly</option>
+                          <option value="daily">Daily</option>
+                        </select>
+                      </div>
+                    )}
                     {formData.coach_id > 0 && (
                       <div className="form-group">
                         <label>Coaching Start</label>
@@ -602,7 +656,9 @@ function MemberFormModal(props: MemberFormModalProps) {
               {(formData.plan_id > 0 || formData.coach_id > 0) && (() => {
                 const selectedPlan = plans.find(p => p.id === formData.plan_id)
                 const selectedCoach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
-                const coachFee = selectedCoach?.professional_fee || 0
+                const coachFee = formData.coach_fee_type === 'daily'
+                  ? (selectedCoach?.professional_fee_daily || 0)
+                  : (selectedCoach?.professional_fee || 0)
                 const total = (selectedPlan?.price || 0) + coachFee
                 return (
                   <div className="newplan-payment-summary" style={{ marginBottom: 12 }}>
@@ -614,7 +670,7 @@ function MemberFormModal(props: MemberFormModalProps) {
                     )}
                     {selectedCoach && (
                       <div className="summary-row">
-                        <span>Coach fee — {selectedCoach.name}</span>
+                        <span>Coach fee ({formData.coach_fee_type}) — {selectedCoach.name}</span>
                         <span className="mono-text">{coachFee ? formatMoney(coachFee) : '—'}</span>
                       </div>
                     )}

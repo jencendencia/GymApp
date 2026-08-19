@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Plan, WaiverTemplate } from '../../types/electron'
+import { Plan, Coach, WaiverTemplate } from '../../types/electron'
 import { formatMoney } from '../../lib/format'
 import { todayLocal, planEndDate } from '../../lib/dates'
 import { log } from '../../lib/logger'
@@ -14,6 +14,8 @@ const METHODS_REQUIRING_REF = ['gcash', 'maya', 'bank_transfer', 'card']
 interface DailyMemberModalProps {
   /** All plans — the modal filters to the 'daily' type. */
   plans: Plan[]
+  /** All coaches — for optional coach assignment. */
+  coaches: Coach[]
   waiverTemplates: WaiverTemplate[]
   /** Capture one finger from the U.are.U reader; null = cancelled/timeout. */
   captureFinger: () => Promise<FingerprintSlotData | null>
@@ -23,7 +25,7 @@ interface DailyMemberModalProps {
 }
 
 /** Quick daily-member enrollment — name, waiver, fingerprint, daily plan, payment (P3). */
-function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, onClose }: DailyMemberModalProps) {
+function DailyMemberModal({ plans, coaches, waiverTemplates, captureFinger, onCreated, onClose }: DailyMemberModalProps) {
   const { showToast } = useToast()
   const [name, setName] = useState('')
   const [waiverAgreed, setWaiverAgreed] = useState(false)
@@ -32,6 +34,8 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
   const [fingers, setFingers] = useState<FingerprintSlotData[]>(emptyFingerSlots)
   const [planId, setPlanId] = useState(0)
   const [amount, setAmount] = useState(0)
+  const [coachId, setCoachId] = useState(0)
+  const [coachFeeType, setCoachFeeType] = useState<'monthly' | 'daily'>('daily')
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [transactionRef, setTransactionRef] = useState('')
   const [loading, setLoading] = useState(false)
@@ -45,10 +49,16 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
 
   const requiresRef = METHODS_REQUIRING_REF.includes(paymentMethod)
 
+  const selectedCoach = coachId > 0 ? coaches.find(c => c.id === coachId) : undefined
+  const coachFee = coachFeeType === 'daily'
+    ? (selectedCoach?.professional_fee_daily || 0)
+    : (selectedCoach?.professional_fee || 0)
+
   const handlePlanChange = (id: number) => {
     setPlanId(id)
     const plan = dailyPlans.find(p => p.id === id)
-    if (plan) setAmount(plan.price)
+    const totalAmount = (plan?.price || 0) + coachFee
+    setAmount(totalAmount)
     setError('')
   }
 
@@ -90,7 +100,11 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
         plan_id: selectedPlan.id,
         plan_start: start,
         plan_end: end,
-        balance: selectedPlan.price || 0,
+        coach_id: coachId || undefined,
+        coaching_start: coachId ? start : undefined,
+        coaching_end: coachId ? end : undefined,
+        coach_fee_type: coachFeeType,
+        balance: (selectedPlan.price || 0) + coachFee,
         waiver_agreed_at: waiverAgreedAt || new Date().toISOString(),
         waiver_template_id: waiverTemplate?.id,
         auto_renew: 0,
@@ -117,15 +131,29 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
         payment_method: paymentMethod,
         transaction_ref: transactionRef.trim() || undefined,
       })
-      const updatedBalance = Math.max(0, (selectedPlan.price || 0) - amount)
+      const updatedBalance = Math.max(0, (selectedPlan.price || 0) + coachFee - amount)
       await window.electronAPI.updateMember(newNumericId, {
         name: name.trim(),
         plan_id: selectedPlan.id,
         plan_start: start,
         plan_end: end,
+        coach_id: coachId || undefined,
+        coaching_start: coachId ? start : undefined,
+        coaching_end: coachId ? end : undefined,
+        coach_fee_type: coachFeeType,
         balance: updatedBalance,
         status: 'active',
       })
+
+      // Record coach fee payment if a coach is assigned and has a fee
+      if (coachId && coachFee > 0) {
+        await window.electronAPI.createCoachFeePayment({
+          coach_id: coachId,
+          member_id: newNumericId,
+          amount: Math.min(coachFee, Math.max(0, amount - (selectedPlan.price || 0))),
+          notes: `Coach fee from daily member enrollment (${coachFeeType})`,
+        })
+      }
       log.action({
         action: 'record_payment',
         entity_type: 'payment',
@@ -217,6 +245,77 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
             />
           </div>
 
+          {/* Coach Selection */}
+          <div className="member-form-card">
+            <h3 className="section-label">🏋️ Coach (Optional)</h3>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Coach</label>
+                <select
+                  className="input"
+                  value={coachId}
+                  onChange={(e) => {
+                    const cid = Number(e.target.value)
+                    setCoachId(cid)
+                    setError('')
+                    // Update amount with new coach fee
+                    const plan = dailyPlans.find(p => p.id === planId)
+                    const newCoach = cid > 0 ? coaches.find(c => c.id === cid) : undefined
+                    const newFee = coachFeeType === 'daily'
+                      ? (newCoach?.professional_fee_daily || 0)
+                      : (newCoach?.professional_fee || 0)
+                    setAmount((plan?.price || 0) + newFee)
+                  }}
+                >
+                  <option value={0}>No coach</option>
+                  {coaches.map((coach) => (
+                    <option key={coach.id} value={coach.id}>{coach.name}</option>
+                  ))}
+                </select>
+              </div>
+              {coachId > 0 && (
+                <div className="form-group">
+                  <label>Fee Type *</label>
+                  <select
+                    className="input"
+                    value={coachFeeType}
+                    onChange={(e) => {
+                      const newType = e.target.value as 'monthly' | 'daily'
+                      setCoachFeeType(newType)
+                      setError('')
+                      // Update amount with new fee type
+                      const plan = dailyPlans.find(p => p.id === planId)
+                      const coach = coaches.find(c => c.id === coachId)
+                      const newFee = newType === 'daily'
+                        ? (coach?.professional_fee_daily || 0)
+                        : (coach?.professional_fee || 0)
+                      setAmount((plan?.price || 0) + newFee)
+                    }}
+                  >
+                    <option value="monthly">Monthly</option>
+                    <option value="daily">Daily</option>
+                  </select>
+                </div>
+              )}
+              {coachId > 0 && (
+                <>
+                  {selectedCoach?.professional_fee ? (
+                    <div className="member-coach-fee-display">
+                      <span className="member-coach-fee-label">Monthly Fee</span>
+                      <span className="member-coach-fee-amount">{formatMoney(selectedCoach.professional_fee)}</span>
+                    </div>
+                  ) : null}
+                  {selectedCoach?.professional_fee_daily ? (
+                    <div className="member-coach-fee-display" style={{ marginTop: 4 }}>
+                      <span className="member-coach-fee-label">Daily Fee</span>
+                      <span className="member-coach-fee-amount">{formatMoney(selectedCoach.professional_fee_daily)}</span>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+
           {/* Membership Plan */}
           <div className="member-form-card">
             <h3 className="section-label">📋 Daily Membership Plan</h3>
@@ -256,9 +355,15 @@ function DailyMemberModal({ plans, waiverTemplates, captureFinger, onCreated, on
                     <span>Plan — {selectedPlan.name}</span>
                     <span className="mono-text">{formatMoney(selectedPlan.price)}</span>
                   </div>
+                  {selectedCoach && coachFee > 0 && (
+                    <div className="summary-row">
+                      <span>Coach fee ({coachFeeType}) — {selectedCoach.name}</span>
+                      <span className="mono-text">{formatMoney(coachFee)}</span>
+                    </div>
+                  )}
                   <div className="summary-row summary-total">
                     <span>Total to be paid</span>
-                    <span className="mono-text">{formatMoney(selectedPlan.price)}</span>
+                    <span className="mono-text">{formatMoney((selectedPlan.price || 0) + coachFee)}</span>
                   </div>
                 </div>
               )}

@@ -340,6 +340,7 @@ function initDatabase() {
       phone TEXT,
       specialty TEXT,
       professional_fee REAL DEFAULT 0,
+      professional_fee_daily REAL DEFAULT 0,
       archived INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -503,6 +504,8 @@ function initDatabase() {
     { table: 'members', column: 'coaching_start', def: 'DATE DEFAULT NULL' },
     { table: 'members', column: 'coaching_end', def: 'DATE DEFAULT NULL' },
     { table: 'coaches', column: 'professional_fee', def: 'REAL DEFAULT 0' },
+    { table: 'coaches', column: 'professional_fee_daily', def: 'REAL DEFAULT 0' },
+    { table: 'members', column: 'coach_fee_type', def: "TEXT DEFAULT 'monthly'" },
     { table: 'payments', column: 'payment_method', def: 'TEXT DEFAULT \'cash\'' },
     { table: 'payments', column: 'transaction_ref', def: 'TEXT DEFAULT NULL' },
     { table: 'payments', column: 'staff_id', def: 'INTEGER DEFAULT NULL' },
@@ -1574,8 +1577,8 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, balance, waiver_agreed_at, waiver_template_id, auto_renew, referrer_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, coach_fee_type, balance, waiver_agreed_at, waiver_template_id, auto_renew, referrer_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -1593,6 +1596,7 @@ function setupIPC() {
       member.coach_id || null,
       member.coaching_start || null,
       member.coaching_end || null,
+      member.coach_fee_type || 'monthly',
       member.balance,
       member.waiver_agreed_at || null,
       member.waiver_template_id ?? null,
@@ -1662,7 +1666,7 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), waiver_template_id = COALESCE(?, waiver_template_id), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, coach_fee_type = COALESCE(?, coach_fee_type), balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), waiver_template_id = COALESCE(?, waiver_template_id), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
       WHERE id = ?
     `).run(
       member.name,
@@ -1680,6 +1684,7 @@ function setupIPC() {
       member.coach_id || null,
       member.coaching_start || null,
       member.coaching_end,
+      member.coach_fee_type || undefined,
       member.balance,
       member.status,
       member.waiver_agreed_at || null,
@@ -2263,18 +2268,18 @@ function setupIPC() {
     const err = validateCoach(coach)
     if (err) throw new Error(err)
     return db?.prepare(`
-      INSERT INTO coaches (name, email, phone, specialty, professional_fee)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0)
+      INSERT INTO coaches (name, email, phone, specialty, professional_fee, professional_fee_daily)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0, coach.professional_fee_daily ?? 0)
   })
 
   ipcMain.handle('update-coach', (_, id: number, coach) => {
     const err = validateCoach(coach)
     if (err) throw new Error(err)
     return db?.prepare(`
-      UPDATE coaches SET name = ?, email = ?, phone = ?, specialty = ?, professional_fee = ?
+      UPDATE coaches SET name = ?, email = ?, phone = ?, specialty = ?, professional_fee = ?, professional_fee_daily = ?
       WHERE id = ?
-    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0, id)
+    `).run(coach.name, coach.email || null, coach.phone || null, coach.specialty || null, coach.professional_fee ?? 0, coach.professional_fee_daily ?? 0, id)
   })
 
   ipcMain.handle('delete-coach', (_, id: number) => {

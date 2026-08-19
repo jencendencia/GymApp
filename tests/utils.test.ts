@@ -127,6 +127,8 @@ describe('validatePlan / validatePayment / validateCoach', () => {
   it('validateCoach', () => {
     expect(validateCoach({ name: '' })).toBe('Coach name is required.')
     expect(validateCoach({ name: 'Coach A', professional_fee: 100 })).toBeNull()
+    expect(validateCoach({ name: 'Coach A', professional_fee: 100, professional_fee_daily: 50 })).toBeNull()
+    expect(validateCoach({ name: 'Coach A', professional_fee_daily: -10 })).toBe('Daily professional fee must be a non-negative number.')
   })
 })
 

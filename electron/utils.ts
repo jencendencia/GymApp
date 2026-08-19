@@ -130,6 +130,7 @@ export function validatePayment(v: Record<string, unknown>): string | null {
 export function validateCoach(v: Record<string, unknown>): string | null {
   if (!isNonEmptyString(v.name)) return 'Coach name is required.'
   if (v.professional_fee !== undefined && v.professional_fee !== null && !isNonNegativeNumber(Number(v.professional_fee))) return 'Professional fee must be a non-negative number.'
+  if (v.professional_fee_daily !== undefined && v.professional_fee_daily !== null && !isNonNegativeNumber(Number(v.professional_fee_daily))) return 'Daily professional fee must be a non-negative number.'
   return null
 }
 
