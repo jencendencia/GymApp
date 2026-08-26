@@ -21,7 +21,12 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
   const [showGuestsModal, setShowGuestsModal] = useState(false)
   const [showExpiringModal, setShowExpiringModal] = useState(false)
   const [showExpiredModal, setShowExpiredModal] = useState(false)
+  const [showMonthlyModal, setShowMonthlyModal] = useState(false)
+  const [showDailyModal, setShowDailyModal] = useState(false)
   const [expiredMembers, setExpiredMembers] = useState<Member[]>([])
+  // Active members split by plan type: monthly vs daily-session enrollments
+  const [monthlyMembers, setMonthlyMembers] = useState<Member[]>([])
+  const [dailyMembers, setDailyMembers] = useState<Member[]>([])
   const [checkingOutGuestId, setCheckingOutGuestId] = useState<number | null>(null)
   const [checkingOut, setCheckingOut] = useState<number | null>(null)
   const [kioskBusy, setKioskBusy] = useState(false)
@@ -84,12 +89,15 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
     }
   }, [])
 
-  const loadExpired = useCallback(async () => {
+  // One fetch feeds the Expired, Active Monthly and Daily Session cards
+  const loadMemberBreakdown = useCallback(async () => {
     try {
       const data = await window.electronAPI.getMembers()
       setExpiredMembers(data.filter(m => m.status === 'expired'))
+      setMonthlyMembers(data.filter(m => m.status === 'active' && m.plan_type === 'monthly' && !m.frozen))
+      setDailyMembers(data.filter(m => m.status === 'active' && m.plan_type === 'daily'))
     } catch (error) {
-      console.error('Failed to load expired members:', error)
+      console.error('Failed to load member breakdown:', error)
     }
   }, [])
 
@@ -97,8 +105,8 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
     loadActiveCheckins()
     loadAtRisk()
     loadGuests()
-    loadExpired()
-  }, [loadActiveCheckins, loadAtRisk, loadGuests, loadExpired, dataVersion])
+    loadMemberBreakdown()
+  }, [loadActiveCheckins, loadAtRisk, loadGuests, loadMemberBreakdown, dataVersion])
 
   // Check a guest/trial out — marks when they left the gym
   const handleGuestCheckout = async (guest: GuestCheckin) => {
@@ -438,6 +446,97 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
           </div>
         </div>
 
+        {/* Active Monthly Members (sits above At-Risk in the left column) */}
+        <div
+          className="dash-panel dash-panel--clickable"
+          onClick={() => setShowMonthlyModal(true)}
+          title="View all active monthly members"
+        >
+          <div className="dash-panel-header">
+            <h3 className="dash-panel-title">Active Monthly Members</h3>
+            <span className="dash-panel-count monthly" title="Total active members on a monthly plan">
+              {monthlyMembers.length} total
+            </span>
+          </div>
+          <div className="dash-panel-body">
+            {monthlyMembers.length === 0 ? (
+              <div className="dash-panel-empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="4" width="18" height="17" rx="2" stroke="var(--text-faint)" strokeWidth="1.5"/>
+                  <path d="M3 9H21" stroke="var(--text-faint)" strokeWidth="1.5"/>
+                  <path d="M8 2V6" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M16 2V6" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <p>No active monthly members</p>
+              </div>
+            ) : (
+              <div className="dash-member-list">
+                {monthlyMembers.slice(0, 6).map((member) => (
+                  <div key={member.id} className="dash-atrisk-item">
+                    <div className="dash-atrisk-avatar monthly">{member.name.charAt(0).toUpperCase()}</div>
+                    <div className="dash-atrisk-info">
+                      <span className="dash-atrisk-name">{member.name}</span>
+                      <span className="dash-atrisk-plan">{member.plan_name || 'No plan'}</span>
+                    </div>
+                    <span className="dash-member-plan-type">Monthly</span>
+                  </div>
+                ))}
+                {monthlyMembers.length > 6 && (
+                  <div className="dash-member-more">+{monthlyMembers.length - 6} more</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Daily Session Members (sits above Expiring This Week in the right column) */}
+        <div
+          className="dash-panel dash-panel--clickable"
+          onClick={() => setShowDailyModal(true)}
+          title="View all active daily session members"
+        >
+          <div className="dash-panel-header">
+            <h3 className="dash-panel-title">Daily Session Members</h3>
+            <span className="dash-panel-count daily" title="Total active members on a daily plan">
+              {dailyMembers.length} total
+            </span>
+          </div>
+          <div className="dash-panel-body">
+            {dailyMembers.length === 0 ? (
+              <div className="dash-panel-empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="4" stroke="var(--text-faint)" strokeWidth="1.5"/>
+                  <path d="M12 2V4" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M12 20V22" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M2 12H4" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M20 12H22" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M5 5L6.4 6.4" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M17.6 17.6L19 19" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M5 19L6.4 17.6" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M17.6 6.4L19 5" stroke="var(--text-faint)" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <p>No active daily session members</p>
+              </div>
+            ) : (
+              <div className="dash-member-list">
+                {dailyMembers.slice(0, 6).map((member) => (
+                  <div key={member.id} className="dash-atrisk-item">
+                    <div className="dash-atrisk-avatar daily">{member.name.charAt(0).toUpperCase()}</div>
+                    <div className="dash-atrisk-info">
+                      <span className="dash-atrisk-name">{member.name}</span>
+                      <span className="dash-atrisk-plan">{member.plan_name || 'No plan'}</span>
+                    </div>
+                    <span className="dash-member-plan-type">Daily</span>
+                  </div>
+                ))}
+                {dailyMembers.length > 6 && (
+                  <div className="dash-member-more">+{dailyMembers.length - 6} more</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* At-Risk Members */}
         <div className="dash-panel">
           <div className="dash-panel-header">
@@ -705,6 +804,98 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
             </div>
             <div className="dash-modal-footer">
               <span className="dash-modal-footer-text">Renew expiring members before their plans lapse</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Active Monthly Members Modal (full list) ── */}
+      {showMonthlyModal && (
+        <div className="dash-modal-overlay" onClick={() => setShowMonthlyModal(false)}>
+          <div className="dash-modal" onClick={e => e.stopPropagation()}>
+            <div className="dash-modal-header">
+              <div>
+                <h2 className="dash-modal-title">Active Monthly Members</h2>
+                <p className="dash-modal-subtitle">{monthlyMembers.length} member{monthlyMembers.length !== 1 ? 's' : ''} on an active monthly plan</p>
+              </div>
+              <button className="dash-modal-close" onClick={() => setShowMonthlyModal(false)}>
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M5 5L15 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className="dash-modal-body">
+              {monthlyMembers.length === 0 ? (
+                <div className="dash-modal-empty">
+                  <p>No active monthly members</p>
+                </div>
+              ) : (
+                <div className="dash-expiring-list">
+                  {monthlyMembers.map((member) => (
+                    <div key={member.id} className="dash-expiring-item">
+                      <div className="dash-expiring-info">
+                        <span className="dash-expiring-name">{member.name}</span>
+                        <span className="dash-expiring-plan">{member.plan_name || 'No plan'}</span>
+                      </div>
+                      {member.plan_end && (
+                        <span className="dash-expiring-days monthly">
+                          thru {new Date(member.plan_end.replace(' ', 'T')).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="dash-modal-footer">
+              <span className="dash-modal-footer-text">{monthlyMembers.length} active member{monthlyMembers.length !== 1 ? 's' : ''} on monthly billing</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Daily Session Members Modal (full list) ── */}
+      {showDailyModal && (
+        <div className="dash-modal-overlay" onClick={() => setShowDailyModal(false)}>
+          <div className="dash-modal" onClick={e => e.stopPropagation()}>
+            <div className="dash-modal-header">
+              <div>
+                <h2 className="dash-modal-title">Daily Session Members</h2>
+                <p className="dash-modal-subtitle">{dailyMembers.length} member{dailyMembers.length !== 1 ? 's' : ''} on an active daily plan</p>
+              </div>
+              <button className="dash-modal-close" onClick={() => setShowDailyModal(false)}>
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M5 5L15 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className="dash-modal-body">
+              {dailyMembers.length === 0 ? (
+                <div className="dash-modal-empty">
+                  <p>No active daily session members</p>
+                </div>
+              ) : (
+                <div className="dash-expiring-list">
+                  {dailyMembers.map((member) => (
+                    <div key={member.id} className="dash-expiring-item">
+                      <div className="dash-expiring-info">
+                        <span className="dash-expiring-name">{member.name}</span>
+                        <span className="dash-expiring-plan">{member.plan_name || 'No plan'}</span>
+                      </div>
+                      {member.plan_end && (
+                        <span className="dash-expiring-days daily">
+                          today
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="dash-modal-footer">
+              <span className="dash-modal-footer-text">{dailyMembers.length} daily member{dailyMembers.length !== 1 ? 's' : ''} enrolled today</span>
             </div>
           </div>
         </div>

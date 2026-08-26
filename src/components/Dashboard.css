@@ -268,6 +268,21 @@
   overflow: hidden;
 }
 
+.dash-panel--clickable {
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+
+.dash-panel--clickable:hover {
+  border-color: var(--accent, #58cc7c);
+  box-shadow: 0 0 0 1px rgba(88, 204, 124, 0.15), 0 4px 20px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px);
+}
+
+.dash-panel--clickable:active {
+  transform: translateY(0);
+}
+
 .dash-panel-header {
   display: flex;
   align-items: center;
@@ -498,6 +513,14 @@
   color: var(--danger, #ff4d4d);
 }
 
+.dash-expiring-days.monthly {
+  color: var(--accent, #58cc7c);
+}
+
+.dash-expiring-days.daily {
+  color: var(--info, #4da8ff);
+}
+
 /* Today's Guests list */
 .dash-guest-list {
   display: flex;
@@ -612,6 +635,64 @@
 .dash-guest-checkout-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* Active Monthly / Daily Session member cards */
+.dash-panel-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.dash-panel-count.monthly {
+  background: rgba(88, 204, 124, 0.12);
+  color: var(--accent, #58cc7c);
+}
+
+.dash-panel-count.daily {
+  background: rgba(77, 168, 255, 0.12);
+  color: var(--info, #4da8ff);
+}
+
+.dash-atrisk-avatar.monthly {
+  background: rgba(88, 204, 124, 0.12);
+  color: var(--accent, #58cc7c);
+}
+
+.dash-atrisk-avatar.daily {
+  background: rgba(77, 168, 255, 0.12);
+  color: var(--info, #4da8ff);
+}
+
+.dash-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dash-member-plan-type {
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2, #252830);
+  color: var(--text-muted, #8b8fa3);
+  flex-shrink: 0;
+}
+
+.dash-member-more {
+  padding: 8px 12px 4px;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  color: var(--text-faint, #5a5d6a);
+  text-align: center;
 }
 
 /* At-Risk Members list */
