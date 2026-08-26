@@ -1188,6 +1188,8 @@ function getDailyReportData(date: string) {
 
   // Coach Report — per-coach summary scoped to the selected day (P3)
   // Included inside the daily report so there is no separate coach tab/export.
+  // Only coaches with at least one enrollment (coach fee payment) that day are
+  // included; if none qualify the whole Coach Report section is omitted.
   const coaches = (db?.prepare(`
     SELECT c.id as coach_id, c.name as coach_name, c.specialty,
       (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0) as totalMembers,
@@ -1196,8 +1198,12 @@ function getDailyReportData(date: string) {
       (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id) as totalCollected
     FROM coaches c
     WHERE c.archived = 0
+      AND EXISTS (
+        SELECT 1 FROM coach_fee_payments cfp
+        WHERE cfp.coach_id = c.id AND DATE(cfp.created_at, 'localtime') = ?
+      )
     ORDER BY c.name ASC
-  `).all(today) as any[]) || []
+  `).all(today, today) as any[]) || []
 
   return {
     date: today,
@@ -2772,6 +2778,8 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
 
       // Coach Report — per-coach summary scoped to the selected month (P3)
       // Included inside the monthly report so there is no separate coach tab/export.
+      // Only coaches with at least one enrollment (coach fee payment) that month
+      // are included; if none qualify the whole Coach Report section is omitted.
       const coaches = db?.prepare(`
         SELECT c.id as coach_id, c.name as coach_name, c.specialty,
           (SELECT COUNT(*) FROM members m WHERE m.coach_id = c.id AND m.archived = 0) as totalMembers,
@@ -2780,8 +2788,12 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
           (SELECT COALESCE(SUM(cfp.amount), 0) FROM coach_fee_payments cfp WHERE cfp.coach_id = c.id) as totalCollected
         FROM coaches c
         WHERE c.archived = 0
+          AND EXISTS (
+            SELECT 1 FROM coach_fee_payments cfp
+            WHERE cfp.coach_id = c.id AND strftime('%Y-%m', cfp.created_at, 'localtime') = ?
+          )
         ORDER BY c.name ASC
-      `).all(ym) as any[] || []
+      `).all(ym, ym) as any[] || []
 
       const totalRevenue = revenueRow?.total || 0
       const activeCount = activeCountRow?.count || 1
