@@ -40,6 +40,7 @@ interface SettingsState {
   smsChannel: string
   cloudProvider: string
   cloudApiKey: string
+  cloudApiUsername: string
   cloudSender: string
   renewalSmsTemplate: string
   receiptSmsTemplate: string
@@ -111,6 +112,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     smsChannel: 'off',
     cloudProvider: 'philsms',
     cloudApiKey: '',
+    cloudApiUsername: '',
     cloudSender: '',
     renewalSmsTemplate: DEFAULT_SMS_RENEWAL_TEMPLATE,
     receiptSmsTemplate: DEFAULT_SMS_RECEIPT_TEMPLATE,
@@ -221,6 +223,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
       if (data.smsChannel) setSettings(prev => ({ ...prev, smsChannel: data.smsChannel }))
       if (data.cloudProvider) setSettings(prev => ({ ...prev, cloudProvider: data.cloudProvider }))
       if (data.cloudApiKey) setSettings(prev => ({ ...prev, cloudApiKey: data.cloudApiKey }))
+      if (data.cloudApiUsername) setSettings(prev => ({ ...prev, cloudApiUsername: data.cloudApiUsername }))
       if (data.cloudSender) setSettings(prev => ({ ...prev, cloudSender: data.cloudSender }))
       if (data.renewalSmsTemplate) setSettings(prev => ({ ...prev, renewalSmsTemplate: data.renewalSmsTemplate }))
       if (data.receiptSmsTemplate) setSettings(prev => ({ ...prev, receiptSmsTemplate: data.receiptSmsTemplate }))
@@ -295,6 +298,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         smsChannel: settings.smsChannel,
         cloudProvider: settings.cloudProvider,
         cloudApiKey: settings.cloudApiKey,
+        cloudApiUsername: settings.cloudApiUsername,
         cloudSender: settings.cloudSender,
         renewalSmsTemplate: settings.renewalSmsTemplate || DEFAULT_SMS_RENEWAL_TEMPLATE,
         receiptSmsTemplate: settings.receiptSmsTemplate || DEFAULT_SMS_RECEIPT_TEMPLATE,
@@ -494,7 +498,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
 
   // ── Cloud SMS (PhilSMS) handlers ──
   const handleVerifySms = async () => {
-    setSmsBanner({ type: 'loading', message: 'Verifying PhilSMS connection...' })
+    setSmsBanner({ type: 'loading', message: settings.cloudProvider === 'telnyx' ? 'Verifying Telnyx connection...' : settings.cloudProvider === 'clicksend' ? 'Verifying ClickSend connection...' : 'Verifying PhilSMS connection...' })
     try {
       const status = await window.electronAPI.verifySms()
       setSmsStatus(status)
@@ -1251,7 +1255,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Delivery Channel</span>
                 <span className="setting-description">
-                  How member text alerts are delivered. <strong>Cloud SMS API</strong> needs internet + PhilSMS credits;
+                  How member text alerts are delivered. <strong>Cloud SMS API</strong> needs internet + SMS credits (PhilSMS, Telnyx or ClickSend);
                   <strong> Simulator</strong> logs messages as sent without using credits (great for testing).
                 </span>
               </div>
@@ -1278,15 +1282,40 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 disabled={settings.smsChannel !== 'cloud'}
               >
                 <option value="philsms">PhilSMS (Philippines)</option>
+                <option value="telnyx">Telnyx</option>
+                <option value="clicksend">ClickSend (Philippines)</option>
               </select>
             </div>
+
+            {settings.cloudProvider === 'clicksend' && (
+              <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
+                <div className="setting-info">
+                  <span className="setting-label">API Username</span>
+                  <span className="setting-description">
+                    Your ClickSend account username (shown next to the API key under clicksend.com → API Credentials). 🔒 Stored encrypted (Windows security)
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  className="input setting-input"
+                  value={settings.cloudApiUsername}
+                  onChange={(e) => setSettings({ ...settings, cloudApiUsername: e.target.value })}
+                  placeholder="ClickSend username"
+                  style={{ maxWidth: 340 }}
+                />
+              </div>
+            )}
 
             <div className="setting-item" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 20 }}>
               <div className="setting-info">
                 <span className="setting-label">API Key</span>
                 <span className="setting-description">
-                  Your PhilSMS API token from the dashboard (dashboard.philsms.com → API settings).
-                  🔒 Stored encrypted (Windows security)
+                  {settings.cloudProvider === 'telnyx'
+                    ? 'Your Telnyx API v2 key from the Mission Control portal (telnyx.com → API Keys).'
+                    : settings.cloudProvider === 'clicksend'
+                    ? 'Your ClickSend API key from the dashboard (clicksend.com → API Credentials).'
+                    : 'Your PhilSMS API token from the dashboard (dashboard.philsms.com → API settings).'}
+                  {' '}🔒 Stored encrypted (Windows security)
                 </span>
               </div>
               <input
@@ -1294,7 +1323,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 className="input setting-input"
                 value={settings.cloudApiKey}
                 onChange={(e) => setSettings({ ...settings, cloudApiKey: e.target.value })}
-                placeholder="Paste your PhilSMS API token"
+                placeholder={settings.cloudProvider === 'telnyx' ? 'KEY_xxxxxxxxxxxxxxxxxxxx' : settings.cloudProvider === 'clicksend' ? 'Paste your ClickSend API key' : 'Paste your PhilSMS API token'}
                 style={{ maxWidth: 340 }}
               />
             </div>
@@ -1303,7 +1332,11 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Sender Name / ID</span>
                 <span className="setting-description">
-                  Required by PhilSMS — up to 11 characters (letters &amp; numbers). Falls back to the gym name if empty.
+                  {settings.cloudProvider === 'telnyx'
+                    ? 'Caller ID for Telnyx — use your Telnyx number (e.g. +639171234567) or an alphanumeric sender ID.'
+                    : settings.cloudProvider === 'clicksend'
+                    ? 'Optional for ClickSend — leave empty to use Smart Senders (ClickSend picks the best sender per country), or enter a dedicated number / approved alpha tag (up to 11 characters).'
+                    : 'Required by PhilSMS — up to 11 characters (letters & numbers). Falls back to the gym name if empty.'}
                 </span>
               </div>
               <input
@@ -1311,9 +1344,9 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 className="input setting-input"
                 value={settings.cloudSender}
                 onChange={(e) => setSettings({ ...settings, cloudSender: e.target.value.toUpperCase() })}
-                placeholder="e.g. REPCHECK"
-                maxLength={11}
-                style={{ width: 180 }}
+                placeholder={settings.cloudProvider === 'telnyx' ? '+639171234567' : settings.cloudProvider === 'clicksend' ? 'Leave empty for Smart Senders' : 'e.g. REPCHECK'}
+                maxLength={settings.cloudProvider === 'telnyx' ? 20 : settings.cloudProvider === 'clicksend' ? 16 : 11}
+                style={{ width: 220 }}
               />
             </div>
 
@@ -1355,7 +1388,11 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Gateway Status</span>
                 <span className="setting-description">
-                  Live verification of your PhilSMS token — the app checks the account balance on boot and every 60 seconds.
+                  {settings.cloudProvider === 'telnyx'
+                    ? 'Live verification of your Telnyx API key — the app checks connectivity on boot and every 60 seconds.'
+                    : settings.cloudProvider === 'clicksend'
+                    ? 'Live verification of your ClickSend credentials — the app checks the account balance on boot and every 60 seconds.'
+                    : 'Live verification of your PhilSMS token — the app checks the account balance on boot and every 60 seconds.'}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

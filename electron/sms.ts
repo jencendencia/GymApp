@@ -15,9 +15,12 @@
 //
 // Settings keys (all stored in the `settings` table):
 //   smsChannel          'off' | 'simulator' | 'cloud'
-//   cloudProvider       'philsms' (only provider today)
-//   cloudApiKey         PhilSMS API token (stored encrypted — in SECRET_KEYS)
-//   cloudSender         Sender ID (<= 11 chars, alphanumeric)
+//   cloudProvider       'philsms' | 'telnyx' | 'clicksend'
+//   cloudApiKey         PhilSMS API token / Telnyx API key / ClickSend API key
+//                       (stored encrypted — in SECRET_KEYS)
+//   cloudApiUsername    ClickSend account username (Basic auth — SECRET_KEYS)
+//   cloudSender         Sender ID (<= 11 chars alphanumeric for PhilSMS; for
+//                       ClickSend optional — empty = Smart Senders)
 //   renewalSmsTemplate  Renewal-reminder template ({{gym}} {{name}} {{plan}}
 //                       {{date}} {{days}})
 //   receiptSmsTemplate  Payment-receipt template ({{gym}} {{name}} {{amount}}
@@ -27,13 +30,16 @@
 
 import { BrowserWindow, net } from 'electron'
 import type Database from 'better-sqlite3'
-// Reuse the main process secret decryption (cloudApiKey is stored encrypted via
-// safeStorage/DPAPI — SECRET_KEYS in main.ts) and its file logger. Both modules
-// are bundled into a single dist-electron/main.js, and decryptSecret/logMain
-// are only called at runtime, so the main ↔ sms circular import resolves safely.
+// Reuse the main process secret decryption (cloudApiKey / cloudApiUsername are
+// stored encrypted via safeStorage/DPAPI — SECRET_KEYS in main.ts) and its file
+// logger. Both modules are bundled into a single dist-electron/main.js, and
+// decryptSecret/logMain are only called at runtime, so the main ↔ sms circular
+// import resolves safely.
 import { decryptSecret, logMain } from './main'
 
 const API_BASE = 'https://dashboard.philsms.com/api/v3'
+const TELNYX_API_BASE = 'https://api.telnyx.com/v2'
+const CLICKSEND_API_BASE = 'https://rest.clicksend.com/v3'
 const MAX_ATTEMPTS = 5
 const POLL_MS = 1000
 const RETRY_DELAY_MS = 800
@@ -78,6 +84,7 @@ interface SmsConfig {
   channel: 'off' | 'simulator' | 'cloud'
   provider: string
   apiKey: string
+  apiUsername: string
   sender: string
 }
 
@@ -102,8 +109,9 @@ function getSetting(key: string): string {
   if (!dbRef) return ''
   const row = dbRef.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value?: string } | undefined
   if (!row?.value) return ''
-  // cloudApiKey is stored encrypted (in SECRET_KEYS) — decrypt before use.
-  return key === 'cloudApiKey' ? decryptSecret(row.value) : row.value
+  // cloudApiKey / cloudApiUsername are stored encrypted (SECRET_KEYS) — decrypt
+  // before use.
+  return key === 'cloudApiKey' || key === 'cloudApiUsername' ? decryptSecret(row.value) : row.value
 }
 
 /** Current SMS delivery config, resolved from settings. */
@@ -114,6 +122,7 @@ export function getSmsConfig(): SmsConfig {
     channel: channelNorm,
     provider: getSetting('cloudProvider') || 'philsms',
     apiKey: getSetting('cloudApiKey') || '',
+    apiUsername: getSetting('cloudApiUsername') || '',
     sender: getSetting('cloudSender') || '',
   }
 }
@@ -183,15 +192,25 @@ interface ApiResult {
   error?: string
 }
 
-async function apiFetch(path: string, token: string, init: { method: string; body?: string }): Promise<ApiResult> {
+function getApiBase(provider: string): string {
+  return provider === 'telnyx' ? TELNYX_API_BASE : provider === 'clicksend' ? CLICKSEND_API_BASE : API_BASE
+}
+
+async function apiFetch(path: string, token: string, init: { method: string; body?: string }, provider?: string, auth?: { username: string }): Promise<ApiResult> {
+  const baseUrl = getApiBase(provider || 'philsms')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  // ClickSend uses HTTP Basic auth (username = account username, password =
+  // API key) instead of the Bearer tokens the other gateways use.
+  const authorization = auth?.username
+    ? `Basic ${Buffer.from(`${auth.username}:${token}`).toString('base64')}`
+    : `Bearer ${token}`
   try {
-    const res = await net.fetch(API_BASE + path, {
+    const res = await net.fetch(baseUrl + path, {
       method: init.method,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: authorization,
         Accept: 'application/json',
       },
       body: init.body,
@@ -314,7 +333,7 @@ function extractApiError(json: any, text: string): string {
   return 'Unknown PhilSMS error'
 }
 
-/** Verify the PhilSMS token by checking the account balance (GET /api/v3/balance). */
+/** Verify the SMS gateway token/key by checking the account balance or connectivity. */
 export async function verifySmsConnection(): Promise<SmsStatus> {
   const cfg = getSmsConfig()
   const checkedAt = Date.now()
@@ -324,10 +343,95 @@ export async function verifySmsConnection(): Promise<SmsStatus> {
   if (cfg.channel === 'simulator') {
     return { verified: false, kind: 'simulator', balance: null, message: 'Simulator mode — messages are logged, not sent', checkedAt }
   }
-  if (!cfg.apiKey) {
-    return { verified: false, kind: 'not_configured', balance: null, message: 'Cloud SMS not configured — enter your PhilSMS API token', checkedAt }
+  if (!cfg.apiKey || (cfg.provider === 'clicksend' && !cfg.apiUsername)) {
+    const hint = cfg.provider === 'telnyx'
+      ? 'enter your Telnyx API key'
+      : cfg.provider === 'clicksend'
+      ? 'enter your ClickSend username AND API key'
+      : 'enter your PhilSMS API token'
+    return { verified: false, kind: 'not_configured', balance: null, message: `Cloud SMS not configured — ${hint}`, checkedAt }
   }
-  const res = await apiFetch('/balance', cfg.apiKey, { method: 'GET' })
+
+  // ── ClickSend verification ──
+  if (cfg.provider === 'clicksend') {
+    // GET /account echoes the account row — HTTP 200 + data.balance means the
+    // Basic-auth credentials are valid.
+    const res = await apiFetch('/account', cfg.apiKey, { method: 'GET' }, 'clicksend', { username: cfg.apiUsername })
+    if (res.error) {
+      return { verified: false, kind: 'timeout', balance: null, message: 'Key verification timed out — the kiosk PC cannot reach rest.clicksend.com (check internet/firewall)', checkedAt }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { verified: false, kind: 'rejected', balance: null, message: 'ClickSend rejected the username/API key (401) — re-check both from the dashboard (clicksend.com → API Credentials)', checkedAt }
+    }
+    if (!res.ok) {
+      return { verified: false, kind: 'error', balance: null, message: `ClickSend account check failed (HTTP ${res.status}) — ${extractApiError(res.json, res.text)}`, checkedAt }
+    }
+    // ClickSend wraps everything in { http_code, response_code, response_msg,
+    // data }. The account row carries `balance` as a string (e.g. "1117.461060").
+    if (res.json?.response_code && res.json.response_code !== 'SUCCESS') {
+      return { verified: false, kind: 'rejected', balance: null, message: `ClickSend rejected the credentials: ${extractApiError(res.json, res.text)}`, checkedAt }
+    }
+    const balance = extractBalance(res.json)
+    if (balance === null) {
+      const snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+      logMain('warn', 'ClickSend account response unrecognized', { status: res.status, body: res.text })
+      return {
+        verified: false,
+        kind: 'error',
+        balance: null,
+        message: `Unexpected ClickSend response — credentials may be invalid. Response: ${snippet || '(empty body)'}`,
+        checkedAt,
+      }
+    }
+    return {
+      verified: true,
+      kind: balance > 0 ? 'ok' : 'no_credits',
+      balance,
+      message: balance > 0
+        ? `ClickSend verified — balance $${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : 'ClickSend verified — no credits left, top up to send',
+      checkedAt,
+    }
+  }
+
+  // ── Telnyx verification ──
+  if (cfg.provider === 'telnyx') {
+    const res = await apiFetch('/balance', cfg.apiKey, { method: 'GET' }, 'telnyx')
+    if (res.error) {
+      return { verified: false, kind: 'timeout', balance: null, message: 'Key verification timed out — the kiosk PC cannot reach api.telnyx.com (check internet/firewall)', checkedAt }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { verified: false, kind: 'rejected', balance: null, message: 'Telnyx rejected the API key (401) — re-check the key from Mission Control', checkedAt }
+    }
+    if (!res.ok) {
+      return { verified: false, kind: 'error', balance: null, message: `Telnyx balance check failed (HTTP ${res.status}) — ${extractApiError(res.json, res.text)}`, checkedAt }
+    }
+    // Telnyx balance response: { data: { balance: "0.00", currency: "USD" } }
+    const balance = extractBalance(res.json)
+    if (balance === null) {
+      const snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+      logMain('warn', 'Telnyx balance response unrecognized', { status: res.status, body: res.text })
+      return {
+        verified: false,
+        kind: 'error',
+        balance: null,
+        message: `Unexpected Telnyx response — key may be invalid. Response: ${snippet || '(empty body)'}`,
+        checkedAt,
+      }
+    }
+    return {
+      verified: true,
+      kind: balance > 0 ? 'ok' : 'no_credits',
+      balance,
+      message: balance > 0
+        ? `Telnyx verified — balance $${balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : 'Telnyx verified — no credits left, top up to send',
+      checkedAt,
+    }
+  }
+
+  // ── PhilSMS verification ──
+  const res = await apiFetch('/balance', cfg.apiKey, { method: 'GET' }, 'philsms')
   if (res.error) {
     return { verified: false, kind: 'timeout', balance: null, message: 'Key verification timed out — the kiosk PC cannot reach dashboard.philsms.com (check internet/firewall)', checkedAt }
   }
@@ -341,14 +445,11 @@ export async function verifySmsConnection(): Promise<SmsStatus> {
   if (balance === null) {
     const snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 180)
     logMain('warn', 'PhilSMS balance response unrecognized', { status: res.status, body: res.text })
-    // 2xx body that explicitly reports a failed request (e.g. invalid token)
     if (res.json && typeof res.json === 'object' && (res.json.success === false || res.json.status === 'error' || res.json.status === 'failed')) {
       const apiErr = extractApiError(res.json, res.text)
       const detail = apiErr !== 'Unknown PhilSMS error' ? apiErr : (snippet || '(empty body)')
       return { verified: false, kind: 'rejected', balance: null, message: `PhilSMS rejected the API token: ${detail}`, checkedAt }
     }
-    // Otherwise surface the raw body so the actual response shape is visible
-    // (and the full body is in the app log for diagnosis).
     return {
       verified: false,
       kind: 'error',
@@ -391,13 +492,83 @@ export async function sendSmsNow(
     return { ok: true }
   }
   if (!token) {
-    return { ok: false, error: 'No API key configured — paste your PhilSMS API token in Settings' }
+    const hint = cfg.provider === 'telnyx'
+      ? 'paste your Telnyx API key'
+      : cfg.provider === 'clicksend'
+      ? 'paste your ClickSend username and API key'
+      : 'paste your PhilSMS API token'
+    return { ok: false, error: `No API key configured — ${hint} in Settings` }
   }
 
+  const provider = cfg.provider || 'philsms'
+
+  // ── ClickSend send ──
+  if (provider === 'clicksend') {
+    // ClickSend v3: POST /sms/send with a messages collection. `to` is E.164
+    // (+639…), `from` is the sender ID, `body` the message text. Omitting
+    // `from` lets ClickSend's Smart Senders pick the best sender per country;
+    // a configured value passes through untruncated (alpha tags are ≤ 11 chars
+    // but dedicated numbers are longer).
+    const toE164 = recipient.startsWith('+') ? recipient : `+${recipient}`
+    const from = sender.trim() || undefined
+    const res = await apiFetch('/sms/send', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        messages: [{
+          source: 'sdk',
+          ...(from ? { from } : {}),
+          body: message,
+          to: toE164,
+        }],
+      }),
+    }, 'clicksend', { username: cfg.apiUsername })
+    if (res.error) {
+      return { ok: false, error: `Could not reach ClickSend: ${res.error}` }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: 'ClickSend rejected the username/API key (401) — check both in Settings' }
+    }
+    if (!res.ok) {
+      return { ok: false, error: extractApiError(res.json, res.text) }
+    }
+    // A 2xx envelope can still report a per-message failure inside
+    // data.messages[0] (response_code SUCCESS / FAILED) — check it explicitly.
+    const msg0 = res.json?.data?.messages?.[0]
+    if (msg0 && typeof msg0.response_code === 'string' && msg0.response_code !== 'SUCCESS') {
+      const detail = msg0.response_msg || msg0.error_message || 'Message rejected by ClickSend'
+      return { ok: false, error: `ClickSend rejected the message (${msg0.response_code}): ${detail}` }
+    }
+    return { ok: true, balance: extractStrictBalance(res.json) }
+  }
+
+  // ── Telnyx send ──
+  if (provider === 'telnyx') {
+    // Telnyx uses E.164 format: +639171234567
+    const toE164 = recipient.startsWith('+') ? recipient : `+${recipient}`
+    const from = finalSender.includes('+') ? finalSender : undefined
+    const res = await apiFetch('/messages', token, {
+      method: 'POST',
+      body: JSON.stringify({ to: toE164, from, text: message }),
+    }, 'telnyx')
+    if (res.error) {
+      return { ok: false, error: `Could not reach Telnyx: ${res.error}` }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: 'Telnyx rejected the API key (401) — check the key in Settings' }
+    }
+    if (res.ok) {
+      return { ok: true, balance: null }
+    }
+    // Telnyx error shape: { errors: [{ title: "...", detail: "..." }] }
+    const errText = extractApiError(res.json, res.text)
+    return { ok: false, error: errText }
+  }
+
+  // ── PhilSMS send ──
   const res = await apiFetch('/sms/send', token, {
     method: 'POST',
     body: JSON.stringify({ recipient, sender_id: finalSender, type, message }),
-  })
+  }, 'philsms')
   if (res.error) {
     return { ok: false, error: `Could not reach PhilSMS: ${res.error}` }
   }

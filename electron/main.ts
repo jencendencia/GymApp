@@ -206,7 +206,7 @@ function verifyPassword(password: string, stored: string | null | undefined): bo
 // so a copied database file doesn't leak credentials. Values are prefixed so we can
 // distinguish ciphertext from legacy plaintext and from non-secret settings.
 const SECRET_PREFIX = 'enc:v1:'
-const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail', 'backupPassword', 'cloudApiKey'])
+const SECRET_KEYS = new Set(['smtpPass', 'reportOwnerEmail', 'backupPassword', 'cloudApiKey', 'cloudApiUsername'])
 
 function isSecretSetting(key: string): boolean {
   return SECRET_KEYS.has(key)
@@ -551,11 +551,12 @@ function initDatabase() {
   }
 
   // Optional env seeding for cloud SMS (PHILSMS_SETUP_GUIDE.md appendix) —
-  // CLOUD_PROVIDER / CLOUD_API_KEY / CLOUD_SENDER are used as defaults until
-  // changed in Settings.
+  // CLOUD_PROVIDER / CLOUD_API_KEY / CLOUD_API_USERNAME / CLOUD_SENDER are used
+  // as defaults until changed in Settings.
   const envSeed: [string, string | undefined][] = [
     ['cloudProvider', process.env.CLOUD_PROVIDER],
     ['cloudApiKey', process.env.CLOUD_API_KEY],
+    ['cloudApiUsername', process.env.CLOUD_API_USERNAME],
     ['cloudSender', process.env.CLOUD_SENDER],
   ]
   for (const [key, value] of envSeed) {
