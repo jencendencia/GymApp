@@ -1155,7 +1155,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
 <h1>Members List</h1>
 <div class="subtitle">${allForExport.length} member${allForExport.length !== 1 ? 's' : ''} · Generated ${new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
 <table>
-  <thead><tr><th>Member ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Plan</th><th>Status</th><th>Balance</th><th>Plan Start</th><th>Plan End</th><th>Sessions Used</th><th>Waiver</th><th>Member Since</th></tr></thead>
+  <thead><tr><th>Member ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Plan</th><th>Status</th><th>Balance</th><th>Plan Start</th><th>Plan End</th><th>Sessions Used</th><th>Waiver</th><th>Member</th><th>Member Since</th></tr></thead>
   <tbody>
     ${allForExport.map(m => `<tr>
       <td class="mono">${esc(m.member_id)}</td>
@@ -1169,6 +1169,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       <td class="mono">${esc(m.plan_end || '')}</td>
       <td class="mono">${String(m.sessions_used || 0)}</td>
       <td>${m.waiver_agreed_at ? '<span class="tag tag-yes">Yes</span>' : '<span class="tag tag-no">No</span>'}</td>
+      <td>${m.is_member ? '<span class="tag tag-yes">Yes</span>' : '<span class="tag tag-no">No</span>'}</td>
       <td class="mono">${m.created_at ? esc(new Date(m.created_at).toLocaleString()) : ''}</td>
     </tr>`).join('')}
   </tbody>

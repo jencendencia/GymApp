@@ -84,6 +84,13 @@ function MembersTable(props: MembersTableProps) {
     />
   )
 
+  // P4: lifetime membership registration indicator — separate from plan status
+  // (a member whose plan lapsed still keeps their membership)
+  const renderMemberBadge = (member: Member) =>
+    member.is_member ? (
+      <span className="member-badge" title="Registered member — availed membership (never expires)">🪪 Member</span>
+    ) : null
+
   const renderWaiver = (member: Member) =>
     member.waiver_agreed_at ? (
       <span className="waiver-badge signed" title={`Signed ${new Date(member.waiver_agreed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}>✓ Signed</span>
@@ -143,7 +150,7 @@ function MembersTable(props: MembersTableProps) {
                     <td>{renderPhoto(member)}</td>
                     <td className="mono-text">{member.member_id}</td>
                     <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
-                    <td>{member.name}</td>
+                    <td>{member.name}{renderMemberBadge(member)}</td>
                     <td>{getPlanName(member.plan_id)}</td>
                     <td>
                       {member.frozen ? (
@@ -214,7 +221,7 @@ function MembersTable(props: MembersTableProps) {
                       <td>{renderPhoto(member)}</td>
                       <td className="mono-text">{member.member_id}</td>
                       <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
-                      <td>{member.name}</td>
+                      <td>{member.name}{renderMemberBadge(member)}</td>
                       <td>{getPlanName(member.plan_id)}</td>
                       <td className="mono-text">{expiryDate ? new Date(expiryDate).toLocaleDateString() : 'N/A'}</td>
                       <td className="mono-text">

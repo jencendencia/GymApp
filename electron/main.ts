@@ -15,13 +15,9 @@ import * as sms from './sms'
 
 // P4: the global, one-time membership registration cost (a setting, NOT per-plan).
 // Charged when a client toggles "Is a Member" at enrollment, on top of the plan price.
+// The renderer reads it via get-setting('membership_cost'); the main process only
+// needs the key when migrating legacy per-plan costs.
 const MEMBERSHIP_COST_KEY = 'membership_cost'
-
-function getMembershipCost(): number {
-  const row = db?.prepare('SELECT value FROM settings WHERE key = ?').get(MEMBERSHIP_COST_KEY) as any
-  const n = Number(row?.value)
-  return Number.isFinite(n) && n >= 0 ? n : 0
-}
 
 // Normalize a plan payload from the renderer: coerce numerics and accept legacy
 // `membership_cost` payloads (pre-refactor clients) by dropping the field.

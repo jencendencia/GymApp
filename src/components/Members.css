@@ -1385,6 +1385,23 @@
   border-top: 1px dashed var(--border);
 }
 
+/* P4: lifetime membership indicator beside the member's name (avails members-only plans/promos) */
+.member-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(143, 190, 42, 0.16);
+  color: var(--accent-dim, #8fbe2a);
+  border: 1px solid rgba(143, 190, 42, 0.35);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .checkbox-row input[type="checkbox"] {
   width: 16px;
   height: 16px;
