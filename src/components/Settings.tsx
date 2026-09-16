@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import './Settings.css'
 import { StaffUser, FingerprintStatus, SmsStatus, SmsLog } from '../types/electron'
 import { log } from '../lib/logger'
@@ -126,6 +126,11 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
   const [backupBanner, setBackupBanner] = useState<BannerState>({ type: 'none' })
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusState>({ type: 'idle' })
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
+  // Encrypted-backup password prompt (replaces window.prompt, which Electron
+  // doesn't support). Holds the resolver for the pending restore call.
+  const [passwordPrompt, setPasswordPrompt] = useState<{ message: string; resolve: (password: string | null) => void } | null>(null)
+  const [passwordInput, setPasswordInput] = useState('')
+  const passwordInputRef = useRef<HTMLInputElement>(null)
   const [waiverTemplates, setWaiverTemplates] = useState<WaiverTemplate[]>([DEFAULT_WAIVER_TEMPLATE])
   const [waiverForm, setWaiverForm] = useState<{ id: number | null; title: string; content: string }>({ id: null, title: '', content: '' })
   // Cloud SMS (PhilSMS) state
@@ -406,14 +411,56 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
     }
   }
 
+  // Ask for the backup password via a modal (window.prompt is unsupported in
+  // Electron). Resolves with the entered password, or null when cancelled.
+  const askBackupPassword = (message: string) =>
+    new Promise<string | null>((resolve) => {
+      setPasswordInput('')
+      setPasswordPrompt({ message, resolve })
+    })
+
+  const submitBackupPassword = () => {
+    if (!passwordPrompt) return
+    const resolve = passwordPrompt.resolve
+    setPasswordPrompt(null)
+    resolve(passwordInput)
+  }
+
+  const cancelBackupPassword = () => {
+    if (!passwordPrompt) return
+    const resolve = passwordPrompt.resolve
+    setPasswordPrompt(null)
+    resolve(null)
+  }
+
+  // Focus the password field while the prompt is open
+  useEffect(() => {
+    if (passwordPrompt) {
+      setTimeout(() => passwordInputRef.current?.focus(), 50)
+    }
+  }, [passwordPrompt])
+
+  // Escape cancels the prompt (same behavior as ConfirmModal)
+  useEffect(() => {
+    if (!passwordPrompt) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPasswordPrompt(null)
+        passwordPrompt.resolve(null)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [passwordPrompt])
+
   const handleRestore = async () => {
     setShowRestoreConfirm(false)
     setBackupBanner({ type: 'loading', message: 'Restoring from backup...' })
     try {
-      // Encrypted backups need the passphrase (P1 3.6) — prompt until correct or cancelled
+      // Encrypted backups need the passphrase (P1 3.6) — ask via modal until correct or cancelled
       let result = await window.electronAPI.restoreBackup()
       while (result.reason === 'needs_password' || result.reason === 'wrong_password') {
-        const pw = window.prompt(
+        const pw = await askBackupPassword(
           result.reason === 'wrong_password'
             ? 'Incorrect password. Enter the backup password to decrypt this backup:'
             : 'This backup is encrypted. Enter the backup password to decrypt it:'
@@ -498,7 +545,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
 
   // ── Cloud SMS (PhilSMS) handlers ──
   const handleVerifySms = async () => {
-    setSmsBanner({ type: 'loading', message: settings.cloudProvider === 'telnyx' ? 'Verifying Telnyx connection...' : settings.cloudProvider === 'clicksend' ? 'Verifying ClickSend connection...' : 'Verifying PhilSMS connection...' })
+    setSmsBanner({ type: 'loading', message: settings.cloudProvider === 'telnyx' ? 'Verifying Telnyx connection...' : settings.cloudProvider === 'clicksend' ? 'Verifying ClickSend connection...' : settings.cloudProvider === 'semaphore' ? 'Verifying Semaphore connection...' : 'Verifying PhilSMS connection...' })
     try {
       const status = await window.electronAPI.verifySms()
       setSmsStatus(status)
@@ -1255,7 +1302,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
               <div className="setting-info">
                 <span className="setting-label">Delivery Channel</span>
                 <span className="setting-description">
-                  How member text alerts are delivered. <strong>Cloud SMS API</strong> needs internet + SMS credits (PhilSMS, Telnyx or ClickSend);
+                  How member text alerts are delivered. <strong>Cloud SMS API</strong> needs internet + SMS credits (PhilSMS, Semaphore, Telnyx or ClickSend);
                   <strong> Simulator</strong> logs messages as sent without using credits (great for testing).
                 </span>
               </div>
@@ -1282,6 +1329,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 disabled={settings.smsChannel !== 'cloud'}
               >
                 <option value="philsms">PhilSMS (Philippines)</option>
+                <option value="semaphore">Semaphore (Philippines)</option>
                 <option value="telnyx">Telnyx</option>
                 <option value="clicksend">ClickSend (Philippines)</option>
               </select>
@@ -1314,6 +1362,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                     ? 'Your Telnyx API v2 key from the Mission Control portal (telnyx.com → API Keys).'
                     : settings.cloudProvider === 'clicksend'
                     ? 'Your ClickSend API key from the dashboard (clicksend.com → API Credentials).'
+                    : settings.cloudProvider === 'semaphore'
+                    ? 'Your Semaphore API key from your dashboard (semaphore.co → your name in the top bar → API).'
                     : 'Your PhilSMS API token from the dashboard (dashboard.philsms.com → API settings).'}
                   {' '}🔒 Stored encrypted (Windows security)
                 </span>
@@ -1323,7 +1373,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 className="input setting-input"
                 value={settings.cloudApiKey}
                 onChange={(e) => setSettings({ ...settings, cloudApiKey: e.target.value })}
-                placeholder={settings.cloudProvider === 'telnyx' ? 'KEY_xxxxxxxxxxxxxxxxxxxx' : settings.cloudProvider === 'clicksend' ? 'Paste your ClickSend API key' : 'Paste your PhilSMS API token'}
+                placeholder={settings.cloudProvider === 'telnyx' ? 'KEY_xxxxxxxxxxxxxxxxxxxx' : settings.cloudProvider === 'clicksend' ? 'Paste your ClickSend API key' : settings.cloudProvider === 'semaphore' ? 'Paste your Semaphore API key' : 'Paste your PhilSMS API token'}
                 style={{ maxWidth: 340 }}
               />
             </div>
@@ -1336,6 +1386,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                     ? 'Caller ID for Telnyx — use your Telnyx number (e.g. +639171234567) or an alphanumeric sender ID.'
                     : settings.cloudProvider === 'clicksend'
                     ? 'Optional for ClickSend — leave empty to use Smart Senders (ClickSend picks the best sender per country), or enter a dedicated number / approved alpha tag (up to 11 characters).'
+                    : settings.cloudProvider === 'semaphore'
+                    ? 'Optional for Semaphore — leave empty to use your registered Sender Name (semaphore.co → Sender Names), or enter an approved sender name (up to 11 characters).'
                     : 'Required by PhilSMS — up to 11 characters (letters & numbers). Falls back to the gym name if empty.'}
                 </span>
               </div>
@@ -1344,7 +1396,7 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                 className="input setting-input"
                 value={settings.cloudSender}
                 onChange={(e) => setSettings({ ...settings, cloudSender: e.target.value.toUpperCase() })}
-                placeholder={settings.cloudProvider === 'telnyx' ? '+639171234567' : settings.cloudProvider === 'clicksend' ? 'Leave empty for Smart Senders' : 'e.g. REPCHECK'}
+                placeholder={settings.cloudProvider === 'telnyx' ? '+639171234567' : settings.cloudProvider === 'clicksend' ? 'Leave empty for Smart Senders' : settings.cloudProvider === 'semaphore' ? 'Leave empty for your registered Sender Name' : 'e.g. REPCHECK'}
                 maxLength={settings.cloudProvider === 'telnyx' ? 20 : settings.cloudProvider === 'clicksend' ? 16 : 11}
                 style={{ width: 220 }}
               />
@@ -1392,6 +1444,8 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
                     ? 'Live verification of your Telnyx API key — the app checks connectivity on boot and every 60 seconds.'
                     : settings.cloudProvider === 'clicksend'
                     ? 'Live verification of your ClickSend credentials — the app checks the account balance on boot and every 60 seconds.'
+                    : settings.cloudProvider === 'semaphore'
+                    ? 'Live verification of your Semaphore API key — the app checks the credit balance on boot and every 60 seconds (Semaphore allows 2 account checks per minute).'
                     : 'Live verification of your PhilSMS token — the app checks the account balance on boot and every 60 seconds.'}
                 </span>
               </div>
@@ -1694,6 +1748,30 @@ function Settings({ currentUser, onAppNameChange, onAppLogoChange }: { currentUs
         onConfirm={handleRestore}
         onCancel={() => setShowRestoreConfirm(false)}
       />
+
+      {/* Encrypted-backup password prompt (window.prompt is unsupported in Electron) */}
+      {passwordPrompt && (
+        <div className="confirm-overlay" onClick={cancelBackupPassword}>
+          <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-icon">🔒</div>
+            <h2 className="confirm-title">Backup Password</h2>
+            <p className="confirm-message">{passwordPrompt.message}</p>
+            <input
+              ref={passwordInputRef}
+              type="password"
+              className="input"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitBackupPassword() }}
+              style={{ width: '100%', marginBottom: 20, textAlign: 'left' }}
+            />
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={cancelBackupPassword}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitBackupPassword}>Restore</button>
+            </div>
+          </div>
+        </div>
+      )}
 
         <div className="settings-actions">
           {saved && <span className="save-success">✓ Settings saved!</span>}

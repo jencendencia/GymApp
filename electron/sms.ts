@@ -15,12 +15,13 @@
 //
 // Settings keys (all stored in the `settings` table):
 //   smsChannel          'off' | 'simulator' | 'cloud'
-//   cloudProvider       'philsms' | 'telnyx' | 'clicksend'
-//   cloudApiKey         PhilSMS API token / Telnyx API key / ClickSend API key
-//                       (stored encrypted — in SECRET_KEYS)
+//   cloudProvider       'philsms' | 'telnyx' | 'clicksend' | 'semaphore'
+//   cloudApiKey         PhilSMS API token / Telnyx API key / ClickSend API key /
+//                       Semaphore API key (stored encrypted — in SECRET_KEYS)
 //   cloudApiUsername    ClickSend account username (Basic auth — SECRET_KEYS)
 //   cloudSender         Sender ID (<= 11 chars alphanumeric for PhilSMS; for
-//                       ClickSend optional — empty = Smart Senders)
+//                       ClickSend optional — empty = Smart Senders; for
+//                       Semaphore optional — empty = registered Sender Name)
 //   renewalSmsTemplate  Renewal-reminder template ({{gym}} {{name}} {{plan}}
 //                       {{date}} {{days}})
 //   receiptSmsTemplate  Payment-receipt template ({{gym}} {{name}} {{amount}}
@@ -40,6 +41,7 @@ import { decryptSecret, logMain } from './main'
 const API_BASE = 'https://dashboard.philsms.com/api/v3'
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2'
 const CLICKSEND_API_BASE = 'https://rest.clicksend.com/v3'
+const SEMAPHORE_API_BASE = 'https://api.semaphore.co/api/v4'
 const MAX_ATTEMPTS = 5
 const POLL_MS = 1000
 const RETRY_DELAY_MS = 800
@@ -193,7 +195,10 @@ interface ApiResult {
 }
 
 function getApiBase(provider: string): string {
-  return provider === 'telnyx' ? TELNYX_API_BASE : provider === 'clicksend' ? CLICKSEND_API_BASE : API_BASE
+  return provider === 'telnyx' ? TELNYX_API_BASE
+    : provider === 'clicksend' ? CLICKSEND_API_BASE
+    : provider === 'semaphore' ? SEMAPHORE_API_BASE
+    : API_BASE
 }
 
 async function apiFetch(path: string, token: string, init: { method: string; body?: string }, provider?: string, auth?: { username: string }): Promise<ApiResult> {
@@ -348,8 +353,48 @@ export async function verifySmsConnection(): Promise<SmsStatus> {
       ? 'enter your Telnyx API key'
       : cfg.provider === 'clicksend'
       ? 'enter your ClickSend username AND API key'
+      : cfg.provider === 'semaphore'
+      ? 'enter your Semaphore API key'
       : 'enter your PhilSMS API token'
     return { verified: false, kind: 'not_configured', balance: null, message: `Cloud SMS not configured — ${hint}`, checkedAt }
+  }
+
+  // ── Semaphore verification ──
+  if (cfg.provider === 'semaphore') {
+    // GET /account echoes basic account info — HTTP 200 + credit_balance means
+    // the API key is valid. Endpoint is rate-limited to 2 calls/minute.
+    const res = await apiFetch('/account', cfg.apiKey, { method: 'GET' }, 'semaphore')
+    if (res.error) {
+      return { verified: false, kind: 'timeout', balance: null, message: 'Key verification timed out — the kiosk PC cannot reach api.semaphore.co (check internet/firewall)', checkedAt }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { verified: false, kind: 'rejected', balance: null, message: 'Semaphore rejected the API key (401) — re-check the key from your Semaphore dashboard', checkedAt }
+    }
+    if (!res.ok) {
+      return { verified: false, kind: 'error', balance: null, message: `Semaphore account check failed (HTTP ${res.status}) — ${extractApiError(res.json, res.text)}`, checkedAt }
+    }
+    // Account response: { account_id, account_name, status, credit_balance }.
+    const balance = extractBalance(res.json)
+    if (balance === null) {
+      const snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+      logMain('warn', 'Semaphore account response unrecognized', { status: res.status, body: res.text })
+      return {
+        verified: false,
+        kind: 'error',
+        balance: null,
+        message: `Unexpected Semaphore response — key may be invalid. Response: ${snippet || '(empty body)'}`,
+        checkedAt,
+      }
+    }
+    return {
+      verified: true,
+      kind: balance > 0 ? 'ok' : 'no_credits',
+      balance,
+      message: balance > 0
+        ? `Semaphore verified — balance ${balance.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} credits`
+        : 'Semaphore verified — no credits left, top up to send',
+      checkedAt,
+    }
   }
 
   // ── ClickSend verification ──
@@ -496,11 +541,46 @@ export async function sendSmsNow(
       ? 'paste your Telnyx API key'
       : cfg.provider === 'clicksend'
       ? 'paste your ClickSend username and API key'
+      : cfg.provider === 'semaphore'
+      ? 'paste your Semaphore API key'
       : 'paste your PhilSMS API token'
     return { ok: false, error: `No API key configured — ${hint} in Settings` }
   }
 
   const provider = cfg.provider || 'philsms'
+
+  // ── Semaphore send ──
+  if (provider === 'semaphore') {
+    // Semaphore v4: POST /messages with form-encoded fields. `number` accepts
+    // 09… / 639… / +639…; `sendername` defaults to the account's registered
+    // Sender Name when omitted. Send response is an ARRAY of message objects
+    // with status Queued/Pending/Sent/Failed — a 2xx can still carry a Failed
+    // row, so check it explicitly.
+    const from = sender.trim() || undefined
+    const body = new URLSearchParams({
+      apikey: token,
+      number: recipient,
+      message,
+      ...(from ? { sendername: from } : {}),
+    }).toString()
+    const res = await apiFetch('/messages', token, { method: 'POST', body }, 'semaphore')
+    if (res.error) {
+      return { ok: false, error: `Could not reach Semaphore: ${res.error}` }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: 'Semaphore rejected the API key (401) — check the key in Settings' }
+    }
+    if (!res.ok) {
+      return { ok: false, error: extractApiError(res.json, res.text) }
+    }
+    // Send response: [{ message_id, status, … }] — surface per-message failures.
+    const msg0 = Array.isArray(res.json) ? res.json[0] : res.json
+    if (msg0 && typeof msg0 === 'object' && typeof msg0.status === 'string' && /^(failed|refunded)$/i.test(msg0.status)) {
+      const detail = msg0.error_message || extractApiError(msg0, res.text)
+      return { ok: false, error: `Semaphore rejected the message (${msg0.status}): ${detail}` }
+    }
+    return { ok: true, balance: null }
+  }
 
   // ── ClickSend send ──
   if (provider === 'clicksend') {
