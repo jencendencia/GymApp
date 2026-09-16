@@ -97,6 +97,11 @@ export function validatePlan(v: Record<string, unknown>): string | null {
   if (!isNonEmptyString(v.name)) return 'Plan name is required.'
   if (!PLAN_TYPES.includes(v.type as any)) return 'Invalid plan type.'
   if (!isNonNegativeNumber(Number(v.price))) return 'Price must be a non-negative number.'
+  // Optional members-only promo price (NULL = no promo) — only members flagged
+  // is_member can avail it at enrollment/renewal.
+  if (v.promo_price !== undefined && v.promo_price !== null && v.promo_price !== '' && !isNonNegativeNumber(Number(v.promo_price))) return 'Promo price must be a non-negative number.'
+  // Members-only flag: only clients registered as members (is_member) can avail these plans
+  if (v.members_only !== undefined && v.members_only !== null && v.members_only !== '' && ![0, 1, true, false].includes(v.members_only as any)) return 'Invalid members-only flag.'
   // Sessions only apply to per-session plans, duration only to time-based plans.
   // This makes a monthly plan with 0 sessions (the form default) valid, while a
   // session pack with 0 sessions is still rejected. A session pack may also have

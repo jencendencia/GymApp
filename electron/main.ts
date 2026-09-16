@@ -13,6 +13,30 @@ import { todayLocal, nowUtc, validateMember, validatePlan, validatePayment, vali
 import { Worker } from 'worker_threads'
 import * as sms from './sms'
 
+// P4: the global, one-time membership registration cost (a setting, NOT per-plan).
+// Charged when a client toggles "Is a Member" at enrollment, on top of the plan price.
+const MEMBERSHIP_COST_KEY = 'membership_cost'
+
+function getMembershipCost(): number {
+  const row = db?.prepare('SELECT value FROM settings WHERE key = ?').get(MEMBERSHIP_COST_KEY) as any
+  const n = Number(row?.value)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
+// Normalize a plan payload from the renderer: coerce numerics and accept legacy
+// `membership_cost` payloads (pre-refactor clients) by dropping the field.
+function modelPlan(plan: any) {
+  return {
+    name: plan?.name,
+    type: plan?.type,
+    duration_days: plan?.duration_days,
+    sessions: plan?.sessions,
+    price: plan?.price,
+    members_only: plan?.members_only ? 1 : 0,
+    promo_price: plan?.promo_price ?? null,
+  }
+}
+
 let mainWindow: BrowserWindow | null = null
 let kioskWindow: BrowserWindow | null = null
 let db: Database.Database | null = null
@@ -524,6 +548,12 @@ function initDatabase() {
     // P2 5.8: referral rewards — who referred this member + reward points balance
     { table: 'members', column: 'referrer_id', def: 'INTEGER DEFAULT NULL' },
     { table: 'members', column: 'points', def: 'INTEGER DEFAULT 0' },
+    // P4: members-only plans — only clients flagged is_member can avail these plans
+    { table: 'plans', column: 'members_only', def: 'INTEGER DEFAULT 0' },
+    // P4: members-only promo price (NULL = no promo) — only is_member clients can avail
+    { table: 'plans', column: 'promo_price', def: 'REAL DEFAULT NULL' },
+    // P4: membership registration flag — the client opted in as a gym member
+    { table: 'members', column: 'is_member', def: 'INTEGER DEFAULT 0' },
     // P3: plan freeze — admin can freeze a member's plan for a set number of days
     { table: 'members', column: 'frozen', def: 'INTEGER DEFAULT 0' },
     { table: 'members', column: 'freeze_reason', def: 'TEXT DEFAULT NULL' },
@@ -541,6 +571,24 @@ function initDatabase() {
     }
   }
 
+  // P4 migration: membership cost used to live on each plan; now it is one global
+  // setting. Adopt the highest per-plan cost as the app-wide value, then drop the
+  // legacy column so stale per-plan amounts can never resurface.
+  {
+    const planCols = (db?.prepare("PRAGMA table_info(plans)").all() as any[]) || []
+    if (planCols.some(c => c.name === 'membership_cost')) {
+      const highest = db?.prepare('SELECT MAX(membership_cost) as max FROM plans').get() as any
+      const legacyCost = Number(highest?.max)
+      if (Number.isFinite(legacyCost) && legacyCost > 0) {
+        const existing = db?.prepare('SELECT value FROM settings WHERE key = ?').get(MEMBERSHIP_COST_KEY) as any
+        if (!existing?.value) {
+          db?.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(MEMBERSHIP_COST_KEY, String(legacyCost))
+        }
+      }
+      db?.exec('ALTER TABLE plans DROP COLUMN membership_cost')
+    }
+  }
+
   // Seed default admin if no staff exist
   const staffCount = db?.prepare('SELECT COUNT(*) as count FROM staff').get() as any
   if (staffCount && staffCount.count === 0) {
@@ -550,7 +598,7 @@ function initDatabase() {
     logMain('info', 'Default admin user created (admin/admin)')
   }
 
-  // Optional env seeding for cloud SMS (PHILSMS_SETUP_GUIDE.md appendix) —
+  // Optional env seeding for cloud SMS (PhilSMS / Semaphore / Telnyx / ClickSend) —
   // CLOUD_PROVIDER / CLOUD_API_KEY / CLOUD_API_USERNAME / CLOUD_SENDER are used
   // as defaults until changed in Settings.
   const envSeed: [string, string | undefined][] = [
@@ -1584,8 +1632,8 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, coach_fee_type, balance, waiver_agreed_at, waiver_template_id, auto_renew, referrer_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO members (member_id, name, email, phone, photo, emergency_contact, emergency_phone, plan_id, plan_start, plan_end, height, weight, birthday, coach_id, coaching_start, coaching_end, coach_fee_type, balance, waiver_agreed_at, waiver_template_id, auto_renew, referrer_id, is_member)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       member.member_id,
       member.name,
@@ -1608,7 +1656,8 @@ function setupIPC() {
       member.waiver_agreed_at || null,
       member.waiver_template_id ?? null,
       member.auto_renew ? 1 : 0,
-      member.referrer_id || null
+      member.referrer_id || null,
+      member.is_member ? 1 : 0
     )
 
     // P2 5.8: referral reward — the referring member earns points when their
@@ -1673,7 +1722,7 @@ function setupIPC() {
     // P1 4.5: persist a base64 photo to disk, store the repcheck-photo:// URL in the DB
     const photoUrl = savePhotoToDisk(member.photo)
     const res = db?.prepare(`
-      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, coach_fee_type = COALESCE(?, coach_fee_type), balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), waiver_template_id = COALESCE(?, waiver_template_id), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew)
+      UPDATE members SET name = ?, email = ?, phone = ?, photo = ?, emergency_contact = ?, emergency_phone = ?, plan_id = ?, plan_start = ?, plan_end = ?, height = ?, weight = ?, birthday = ?, coach_id = ?, coaching_start = ?, coaching_end = ?, coach_fee_type = COALESCE(?, coach_fee_type), balance = ?, status = ?, waiver_agreed_at = COALESCE(?, waiver_agreed_at), waiver_template_id = COALESCE(?, waiver_template_id), sessions_used = COALESCE(?, sessions_used), auto_renew = COALESCE(?, auto_renew), is_member = COALESCE(?, is_member)
       WHERE id = ?
     `).run(
       member.name,
@@ -1698,6 +1747,8 @@ function setupIPC() {
       member.waiver_template_id ?? undefined,
       member.sessions_used ?? undefined,
       member.auto_renew === undefined ? undefined : (member.auto_renew ? 1 : 0),
+      // P4: membership registration flag (undefined = unchanged in edit mode)
+      member.is_member === undefined ? undefined : (member.is_member ? 1 : 0),
       id
     )
     broadcastDataChanged(event.sender)
@@ -1896,21 +1947,23 @@ function setupIPC() {
   })
 
   ipcMain.handle('create-plan', (_, plan) => {
-    const err = validatePlan(plan)
+    const err = validatePlan(modelPlan(plan))
     if (err) throw new Error(err)
+    const p = modelPlan(plan)
     return db?.prepare(`
-      INSERT INTO plans (name, type, duration_days, sessions, price)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(plan.name, plan.type, plan.duration_days, plan.sessions, plan.price)
+      INSERT INTO plans (name, type, duration_days, sessions, price, members_only, promo_price)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(p.name, p.type, p.duration_days, p.sessions, p.price, p.members_only, p.promo_price)
   })
 
   ipcMain.handle('update-plan', (_, id: number, plan) => {
-    const err = validatePlan(plan)
+    const err = validatePlan(modelPlan(plan))
     if (err) throw new Error(err)
+    const p = modelPlan(plan)
     return db?.prepare(`
-      UPDATE plans SET name = ?, type = ?, duration_days = ?, sessions = ?, price = ?
+      UPDATE plans SET name = ?, type = ?, duration_days = ?, sessions = ?, price = ?, members_only = ?, promo_price = ?
       WHERE id = ?
-    `).run(plan.name, plan.type, plan.duration_days, plan.sessions, plan.price, id)
+    `).run(p.name, p.type, p.duration_days, p.sessions, p.price, p.members_only, p.promo_price, id)
   })
 
   ipcMain.handle('delete-plan', (_, id: number) => {

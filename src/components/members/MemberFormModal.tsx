@@ -99,9 +99,9 @@ interface MemberFormModalProps {
   memberPayments: Payment[]
   paymentsLoading: boolean
   isAdmin: boolean
-  /** P2 5.2: auto-renew toggle (create mode) */
-  autoRenew: boolean
-  onAutoRenewChange: (autoRenew: boolean) => void
+  /** P4: membership registration — the client opts in as a gym member ("Is a Member") */
+  isMember: boolean
+  onIsMemberChange: (isMember: boolean) => void
   refs: {
     fileInputRef: RefObject<HTMLInputElement>
     nameRef: RefObject<HTMLInputElement>
@@ -127,13 +127,66 @@ function MemberFormModal(props: MemberFormModalProps) {
     photoPreview, initialFingers, captureFinger, onFingerprintsChange, waiverAgreed, waiverAgreedAt,
     waiverTemplates, waiverTemplateId, onWaiverTemplateChange, validationAttempted, shakeKey, missingRequired,
     memberIdWarning, checkingMemberId, lastMemberId, lastMemberIdLoaded,
-    memberPayments, paymentsLoading, isAdmin, autoRenew, onAutoRenewChange, refs, onMemberIdChange,
+    memberPayments, paymentsLoading, isAdmin, isMember, onIsMemberChange, refs, onMemberIdChange,
     onPhotoUpload, onCameraCapture, onPaymentStatus, onWaiverAgree, onSubmit, onClose,
   } = props
 
   const [showWaiverModal, setShowWaiverModal] = React.useState(false)
 
   const setFormData = (d: Partial<MemberFormData>) => onFormDataChange({ ...formData, ...d })
+
+  // P4: global one-time membership registration cost (a setting — NOT per-plan).
+  // Charged once when the client toggles "Is a Member", on top of the plan price.
+  const [membershipCost, setMembershipCost] = React.useState(0)
+  React.useEffect(() => {
+    let cancelled = false
+    window.electronAPI.getSetting('membership_cost')
+      .then(v => { if (!cancelled) setMembershipCost(Number(v) || 0) })
+      .catch(() => { /* default 0 */ })
+    return () => { cancelled = true }
+  }, [])
+
+  // P4: members-only promo — the plan's promo price applies only when the client
+  // opted in as a member ("Is a Member" toggle). Otherwise the regular price holds.
+  const planPriceFor = (plan: Plan | undefined, member: boolean): number => {
+    if (!plan) return 0
+    if (member && plan.promo_price !== null && plan.promo_price !== undefined) return Number(plan.promo_price)
+    return Number(plan.price || 0)
+  }
+  // P4: the one-time membership registration cost (charged only when opted in)
+  const membershipFor = (member: boolean): number => (member ? membershipCost : 0)
+  // Total the client owes for a plan under the current membership flag
+  const planTotalCharge = (plan: Plan | undefined, member: boolean): number =>
+    planPriceFor(plan, member) + membershipFor(member)
+
+  // Toggling "Is a Member" re-prices an already-selected plan: the members promo
+  // price + global membership cost apply (or stop applying), and auto-filled
+  // amounts follow. Members-only plans are deselected when membership is removed.
+  const handleIsMemberChange = (checked: boolean) => {
+    onIsMemberChange(checked)
+    const plan = plans.find(p => p.id === formData.plan_id)
+    const coach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
+    const coachFee = formData.coach_id > 0
+      ? (formData.coach_fee_type === 'daily' ? (coach?.professional_fee_daily || 0) : (coach?.professional_fee || 0))
+      : 0
+    // Turning membership OFF while a members-only plan is selected → clear the
+    // selection (the client can't avail that plan without being a member).
+    if (!checked && plan?.members_only) {
+      onFormDataChange({ ...formData, plan_id: 0, plan_end: '', balance: 0 })
+      onPaymentFormChange((prev) => ({ ...prev, amount: coachFee }))
+      return
+    }
+    if (!plan) return
+    const oldTotal = planTotalCharge(plan, isMember) + coachFee
+    const newTotal = planTotalCharge(plan, checked) + coachFee
+    onFormDataChange({ ...formData, balance: planTotalCharge(plan, checked) })
+    onPaymentFormChange((prev) => {
+      // Only override when the amount was auto-filled (not manually customized)
+      const wasAutoFilled = prev.amount <= 0 || prev.amount === oldTotal
+      if (wasAutoFilled) return { ...prev, amount: newTotal }
+      return prev
+    })
+  }
 
   // Create-mode only: multi-session packs (sessions > 1) intentionally have no
   // end date — the Plan End field is disabled so no one types a date that the
@@ -329,6 +382,28 @@ function MemberFormModal(props: MemberFormModalProps) {
 
               {selectedMember && (
                 <div className="member-form-card">
+                  <h3 className="section-label">🪪 Membership Registration</h3>
+                  <div className="form-group form-toggle-section">
+                    <label className="toggle-row">
+                      <span className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={isMember}
+                          onChange={(e) => onIsMemberChange(e.target.checked)}
+                        />
+                        <span className="toggle-track" aria-hidden="true" />
+                      </span>
+                      <span>Is a Member</span>
+                    </label>
+                    <p className="field-hint">
+                      The client is registered as a gym member — members-only promo prices apply when renewing their plan.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {selectedMember && (
+                <div className="member-form-card">
                   <h3 className="section-label">💳 Payment History</h3>
                   {paymentsLoading ? (
                     <p className="payment-muted">Loading payments…</p>
@@ -396,30 +471,38 @@ function MemberFormModal(props: MemberFormModalProps) {
                           // (per-session passes = +1 day; multi-session packs = no end
                           // date). Start defaults to today when not yet set.
                           const start = formData.plan_start || todayLocal()
+                          // P4: charge the promo price + membership cost only when the
+                          // client opted in as a member; otherwise the regular price.
                           onFormDataChange({
                             ...formData,
                             plan_id: planId,
                             plan_start: start,
                             plan_end: plan ? planEndDate(plan, start) : '',
-                            balance: plan ? plan.price : 0,
+                            balance: plan ? planTotalCharge(plan, isMember) : 0,
                           })
                           onPaymentFormChange((prev) => {
-                            const wasAutoFilled = prev.amount <= 0 || prev.amount === (prevPlan?.price || 0) + coachFee
+                            const wasAutoFilled = prev.amount <= 0 || prev.amount === planTotalCharge(prevPlan, isMember) + coachFee
                             if (planId === 0) {
                               if (prevPlan && wasAutoFilled) return { ...prev, amount: coachFee }
                               return prev
                             }
-                            if (wasAutoFilled) return { ...prev, amount: (plan ? plan.price : 0) + coachFee }
+                            if (wasAutoFilled) return { ...prev, amount: planTotalCharge(plan, isMember) + coachFee }
                             return prev
                           })
                         }}
                       >
                         <option value={0}>— Select a plan —</option>
-                        {plans.map((plan) => (
-                          <option key={plan.id} value={plan.id}>{plan.name} ({formatMoney(plan.price)})</option>
+                        {/* P4: members-only plans are only selectable when "Is a Member" is on */}
+                        {plans.filter(p => !p.members_only || isMember).map((plan) => (
+                          <option key={plan.id} value={plan.id}>
+                            {plan.members_only ? '🪪 ' : ''}{plan.name} ({formatMoney(planPriceFor(plan, isMember))})
+                          </option>
                         ))}
                       </select>
                       {formData.plan_id === 0 && <span className="field-required-hint">⚠️ Select a plan</span>}
+                      {plans.some(p => p.members_only && !isMember) && (
+                        <span className="field-hint">🪪 Members-only plans are available when "Is a Member" is on.</span>
+                      )}
                     </div>
                     <div className="form-group">
                       <label>Balance</label>
@@ -471,17 +554,23 @@ function MemberFormModal(props: MemberFormModalProps) {
                       )}
                     </div>
                   </div>
-                  {/* P2 5.2: auto-renew toggle for new members */}
-                  <div className="form-group auto-renew-toggle">
-                    <label className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={autoRenew}
-                        onChange={(e) => onAutoRenewChange(e.target.checked)}
-                      />
-                      <span>Auto-renew at plan expiry</span>
+                  {/* P4: membership registration — opting in enables the members-only
+                      promo price and adds the plan's one-time membership cost. */}
+                  <div className="form-group form-toggle-section">
+                    <label className="toggle-row">
+                      <span className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={isMember}
+                          onChange={(e) => handleIsMemberChange(e.target.checked)}
+                        />
+                        <span className="toggle-track" aria-hidden="true" />
+                      </span>
+                      <span>Is a Member</span>
                     </label>
-                    <p className="field-hint">The membership renews automatically when the plan expires.</p>
+                    <p className="field-hint">
+                      The client is registering as a gym member — enables members-only promo prices and adds the plan's one-time membership cost.
+                    </p>
                   </div>
                 </div>
               )}
@@ -514,7 +603,7 @@ function MemberFormModal(props: MemberFormModalProps) {
                           // Add the coach's professional fee to the amount to be paid
                           onPaymentFormChange((prev) => {
                             const plan = plans.find(p => p.id === formData.plan_id)
-                            const planPrice = plan?.price || 0
+                            const planPrice = planTotalCharge(plan, isMember)
                             const wasAutoFilled = prev.amount === planPrice + oldFee
                             if (prev.amount <= 0 || wasAutoFilled) {
                               return { ...prev, amount: Math.max(0, planPrice + newFee) }
@@ -575,7 +664,7 @@ function MemberFormModal(props: MemberFormModalProps) {
                             setFormData({ ...formData, coach_fee_type: newType })
                             onPaymentFormChange((prev) => {
                               const plan = plans.find(p => p.id === formData.plan_id)
-                              const planPrice = plan?.price || 0
+                              const planPrice = planTotalCharge(plan, isMember)
                               const wasAutoFilled = prev.amount === planPrice + oldFee
                               if (prev.amount <= 0 || wasAutoFilled) {
                                 return { ...prev, amount: Math.max(0, planPrice + newFee) }
@@ -652,20 +741,36 @@ function MemberFormModal(props: MemberFormModalProps) {
                   <span className="payment-hint">A payment is required to create this member</span>
                 </div>
               </div>
-              {/* Amount breakdown: plan + coach fee = total to be paid */}
+              {/* Amount breakdown: plan (or members-only promo) + membership cost + coach fee = total to be paid */}
               {(formData.plan_id > 0 || formData.coach_id > 0) && (() => {
                 const selectedPlan = plans.find(p => p.id === formData.plan_id)
                 const selectedCoach = formData.coach_id > 0 ? coaches.find(c => c.id === formData.coach_id) : undefined
                 const coachFee = formData.coach_fee_type === 'daily'
                   ? (selectedCoach?.professional_fee_daily || 0)
                   : (selectedCoach?.professional_fee || 0)
-                const total = (selectedPlan?.price || 0) + coachFee
+                const promoActive = isMember && selectedPlan?.promo_price !== null && selectedPlan?.promo_price !== undefined
+                const planLine = planPriceFor(selectedPlan, isMember)
+                const membershipLine = membershipFor(isMember)
+                const total = planLine + membershipLine + coachFee
                 return (
                   <div className="newplan-payment-summary" style={{ marginBottom: 12 }}>
                     {selectedPlan && (
                       <div className="summary-row">
-                        <span>Plan — {selectedPlan.name}</span>
-                        <span className="mono-text">{formatMoney(selectedPlan.price)}</span>
+                        <span>
+                          {promoActive ? '🏷️ Plan (members promo) — ' : 'Plan — '}{selectedPlan.name}
+                        </span>
+                        <span className="mono-text">
+                          {promoActive && (
+                            <s style={{ opacity: 0.55, marginRight: 6 }}>{formatMoney(selectedPlan.price)}</s>
+                          )}
+                          {formatMoney(planLine)}
+                        </span>
+                      </div>
+                    )}
+                    {membershipLine > 0 && (
+                      <div className="summary-row">
+                        <span>🪪 Membership registration (one-time)</span>
+                        <span className="mono-text">{formatMoney(membershipLine)}</span>
                       </div>
                     )}
                     {selectedCoach && (

@@ -67,7 +67,11 @@ function NewPlanModal(props: NewPlanModalProps) {
 
   // P2 5.2: partial-payment summary — plan price vs paying now vs remaining
   const selectedPlan = plans.find(p => p.id === data.plan_id)
-  const planPrice = selectedPlan?.price || 0
+  // P4: members-only promo — only clients flagged is_member can avail the promo price
+  const isMemberClient = !!member.is_member
+  const promoActive = !!(isMemberClient && selectedPlan && selectedPlan.promo_price !== null && selectedPlan.promo_price !== undefined)
+  const regularPrice = Number(selectedPlan?.price || 0)
+  const planPrice = promoActive ? Number(selectedPlan!.promo_price) : regularPrice
   const payingNow = payment.amount > 0 ? payment.amount : 0
   const remainingAfter = Math.max(0, (member.balance || 0) + planPrice - payingNow)
   // Multi-session packs (sessions > 1) have no time-based end — lock the field.
@@ -109,9 +113,10 @@ function NewPlanModal(props: NewPlanModalProps) {
                 }}
               >
                 <option value={0}>— Select a plan —</option>
-                {plans.map((plan) => (
+                {/* P4: members-only plans are only selectable for members (is_member) */}
+                {plans.filter(p => !p.members_only || isMemberClient).map((plan) => (
                   <option key={plan.id} value={plan.id}>
-                    {plan.name} ({formatMoney(plan.price)})
+                    {plan.members_only ? '🪪 ' : ''}{plan.name} ({formatMoney(isMemberClient && plan.promo_price !== null && plan.promo_price !== undefined ? plan.promo_price : plan.price)})
                   </option>
                 ))}
               </select>
@@ -249,6 +254,16 @@ function NewPlanModal(props: NewPlanModalProps) {
 
               {/* P2 5.2: partial-payment summary — plan price vs paying now vs remaining */}
               <div className="newplan-payment-summary">
+                {/* P4: members-only promo indicator — the promo price replaced the regular price */}
+                {promoActive && (
+                  <div className="summary-row plan-promo-applied">
+                    <span>🏷️ Members-only promo applied</span>
+                    <span className="mono-text">
+                      <s style={{ opacity: 0.55, marginRight: 6 }}>{formatMoney(regularPrice)}</s>
+                      {formatMoney(planPrice)}
+                    </span>
+                  </div>
+                )}
                 <div className="summary-row"><span>Plan price</span><span className="mono-text">{formatMoney(planPrice)}</span></div>
                 <div className="summary-row"><span>Paying now</span><span className="mono-text">{formatMoney(payingNow)}</span></div>
                 <div className="summary-row summary-total">

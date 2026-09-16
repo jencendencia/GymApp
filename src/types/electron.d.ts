@@ -241,6 +241,8 @@ export interface Member {
   referrer_id?: number
   /** Referral reward points balance — 100 points redeem for 1 free month. */
   points?: number
+  /** P4: membership registration — the client opted in as a gym member ("Is a Member") */
+  is_member?: number
   /** P3: Plan freeze status */
   frozen?: number
   freeze_reason?: string
@@ -274,6 +276,8 @@ export interface CreateMemberInput {
   auto_renew?: number
   /** Member who referred this member — referrer earns 20 reward points (P2 5.8). */
   referrer_id?: number
+  /** P4: membership registration — the client opted in as a gym member ("Is a Member") */
+  is_member?: number
 }
 
 export interface UpdateMemberInput {
@@ -299,6 +303,8 @@ export interface UpdateMemberInput {
   waiver_template_id?: number
   sessions_used?: number
   auto_renew?: number
+  /** P4: membership registration — the client opted in as a gym member ("Is a Member") */
+  is_member?: number
 }
 
 export interface Plan {
@@ -308,6 +314,10 @@ export interface Plan {
   duration_days?: number
   sessions?: number
   price: number
+  /** P4: members-only plan — only clients flagged is_member can avail it */
+  members_only?: number
+  /** P4: members-only promo price (undefined = no promo) */
+  promo_price?: number | null
   created_at: string
 }
 
@@ -317,6 +327,10 @@ export interface CreatePlanInput {
   duration_days?: number
   sessions?: number
   price: number
+  /** P4: members-only plan — only clients flagged is_member can avail it */
+  members_only?: number
+  /** P4: members-only promo price (undefined = no promo) */
+  promo_price?: number | null
 }
 
 export interface UpdatePlanInput {
@@ -325,6 +339,10 @@ export interface UpdatePlanInput {
   duration_days?: number
   sessions?: number
   price: number
+  /** P4: members-only plan — only clients flagged is_member can avail it */
+  members_only?: number
+  /** P4: members-only promo price (undefined = no promo) */
+  promo_price?: number | null
 }
 
 export interface Checkin {

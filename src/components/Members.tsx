@@ -46,6 +46,11 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [deleteTarget, setDeleteTarget] = useState<Member | null>(null)
   const [freezeTarget, setFreezeTarget] = useState<Member | null>(null)
   const [unfreezeTarget, setUnfreezeTarget] = useState<Member | null>(null)
+  // Text-input prompt state (replaces window.prompt, which Electron doesn't
+  // support). Holds the resolver for the pending prompt call.
+  const [inputPrompt, setInputPrompt] = useState<{ title: string; message: string; resolve: (value: string | null) => void } | null>(null)
+  const [inputPromptValue, setInputPromptValue] = useState('')
+  const inputPromptRef = useRef<HTMLInputElement>(null)
   const [idCardMember, setIdCardMember] = useState<Member | null>(null)
   const [idCardQr, setIdCardQr] = useState('')
   const [idCardPrinting, setIdCardPrinting] = useState(false)
@@ -90,9 +95,19 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     transaction_ref: '',
   })
 
-  // P2 5.2: auto-renew flags (new-plan modal + member form)
+  // P2 5.2: auto-renew flag (New Plan renewal modal only — membership itself never expires)
   const [newPlanAutoRenew, setNewPlanAutoRenew] = useState(false)
-  const [formAutoRenew, setFormAutoRenew] = useState(false)
+
+  // P4: membership registration — the client opts in as a gym member at enrollment
+  const [formIsMember, setFormIsMember] = useState(false)
+
+  // P4: global one-time membership registration cost (a setting, not per-plan)
+  const [membershipCost, setMembershipCost] = useState(0)
+  useEffect(() => {
+    window.electronAPI.getSetting('membership_cost')
+      .then(v => setMembershipCost(Number(v) || 0))
+      .catch(() => { /* default 0 */ })
+  }, [])
 
   // Last staff-entered numeric member ID (to suggest the next ID in the new-member form)
   const [lastMemberId, setLastMemberId] = useState<{ last: number; next: number }>({ last: 0, next: 1 })
@@ -449,8 +464,13 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         balance: formData.balance || 0,
         waiver_agreed_at: waiverAgreed ? (waiverAgreedAt || new Date().toISOString()) : undefined,
         waiver_template_id: waiverAgreed ? (selectedWaiverTemplateId ?? undefined) : undefined,
-        auto_renew: formAutoRenew ? 1 : 0,
         referrer_id: formData.referrer_id || undefined,
+        // P4: membership registration — plan price already includes the promo + membership
+        // cost via the form's balance auto-fill, and the membership cost is collected
+        // together with the plan payment below.
+        is_member: formIsMember ? 1 : 0,
+        // Membership never expires — no auto-renew option at enrollment
+        auto_renew: 0,
       })
 
       // P2 5.8: the referrer's +20 reward points were granted by the backend on
@@ -518,13 +538,22 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         })
 
         // Record the coach professional fee as a coach fee payment so it shows up
-        // in the Coaches page collected totals (only the portion this payment covers)
+        // in the Coaches page collected totals (only the portion this payment covers).
+        // P4: the plan charge is promo price (members) + membership cost, so only the
+        // amount beyond that is coach fee.
         if (formData.coach_id > 0) {
           const coach = coaches.find(c => c.id === formData.coach_id)
           const coachFee = formData.coach_fee_type === 'daily'
             ? (coach?.professional_fee_daily || 0)
             : (coach?.professional_fee || 0)
-          const planPrice = plans.find(p => p.id === formData.plan_id)?.price || 0
+          const createdPlan = plans.find(p => p.id === formData.plan_id)
+          // Plan charge = promo price (members) or regular price, plus the global
+          // one-time membership cost when the client registered as a member.
+          const planPrice = (createdPlan
+            ? (formIsMember && createdPlan.promo_price !== null && createdPlan.promo_price !== undefined
+                ? Number(createdPlan.promo_price)
+                : Number(createdPlan.price || 0))
+            : 0) + (formIsMember ? membershipCost : 0)
           const feeCollected = Math.max(0, Math.min(coachFee, payAmount - planPrice))
           if (coach && feeCollected > 0) {
             await window.electronAPI.createCoachFeePayment({
@@ -574,6 +603,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         status: formData.status,
         waiver_agreed_at: waiverAgreedAt || undefined,
         waiver_template_id: selectedWaiverTemplateId ?? undefined,
+        // P4: membership registration flag (edit mode can toggle it)
+        is_member: formIsMember ? 1 : 0,
       })
 
       // Update fingerprint templates if any were captured (replaces the old set)
@@ -602,6 +633,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       if (selectedMember.coaching_end !== formData.coaching_end) changedFields.coaching_end = formData.coaching_end
       if (selectedMember.balance !== formData.balance) changedFields.balance = formData.balance
       if (selectedMember.status !== formData.status) changedFields.status = formData.status
+      if (Number(selectedMember.is_member || 0) !== (formIsMember ? 1 : 0)) changedFields.is_member = formIsMember ? 1 : 0
       if (Object.keys(changedFields).length > 0) {
         log.updateMember(selectedMember.id, formData.name, changedFields)
       }
@@ -715,7 +747,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setValidationAttempted(false)
     setShakeKey(0)
     setPaymentForm({ amount: 0, type: 'new_plan', payment_method: 'cash', transaction_ref: '' })
-    setFormAutoRenew(false)
+    setFormIsMember(false)
   }
 
   const generateMemberId = () => {
@@ -777,9 +809,12 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
       return
     }
     try {
-      // Get the plan price for auto-updating balance
+      // Get the plan price for auto-updating balance. P4: members flagged is_member
+      // get the plan's members-only promo price when one is set.
       const selectedPlan = plans.find(p => p.id === newPlanData.plan_id)
-      const planPrice = selectedPlan?.price || 0
+      const planPrice = (selectedPlan && newPlanMember.is_member && selectedPlan.promo_price !== null && selectedPlan.promo_price !== undefined)
+        ? Number(selectedPlan.promo_price)
+        : Number(selectedPlan?.price || 0)
       // A single-session (per-session) pass keeps its end date; multi-session packs
       // have no time-based end (NULL) so auto-expire never flags the member.
       const planEnd = selectedPlan?.type === 'session_pack'
@@ -881,7 +916,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     setWaiverAgreed(!!member.waiver_agreed_at)
     setWaiverAgreedAt(member.waiver_agreed_at || null)
     setSelectedWaiverTemplateId(member.waiver_template_id ?? null)
-    setFormAutoRenew(!!member.auto_renew)
+    setFormIsMember(!!member.is_member)
     setValidationAttempted(false)
     setShakeKey(0)
     setShowForm(true)
@@ -919,10 +954,55 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
     }
   }
 
+  // Ask for optional text via a modal (window.prompt is unsupported in
+  // Electron). Resolves with the entered value, or null when cancelled.
+  const askTextPrompt = (title: string, message: string) =>
+    new Promise<string | null>((resolve) => {
+      setInputPromptValue('')
+      setInputPrompt({ title, message, resolve })
+    })
+
+  const submitTextPrompt = () => {
+    if (!inputPrompt) return
+    const resolve = inputPrompt.resolve
+    setInputPrompt(null)
+    resolve(inputPromptValue)
+  }
+
+  const cancelTextPrompt = () => {
+    if (!inputPrompt) return
+    const resolve = inputPrompt.resolve
+    setInputPrompt(null)
+    resolve(null)
+  }
+
+  // Focus the input field while the prompt is open
+  useEffect(() => {
+    if (inputPrompt) {
+      setTimeout(() => inputPromptRef.current?.focus(), 50)
+    }
+  }, [inputPrompt])
+
+  // Escape cancels the prompt (same behavior as ConfirmModal)
+  useEffect(() => {
+    if (!inputPrompt) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setInputPrompt(null)
+        inputPrompt.resolve(null)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [inputPrompt])
+
   // Void or refund a payment (P2 5.2)
   const handlePaymentStatus = async (payment: Payment, status: 'voided' | 'refunded') => {
     const label = status === 'voided' ? 'void' : 'refund'
-    const note = window.prompt(`Enter a reason for the ${label} (optional):`, '')
+    const note = await askTextPrompt(
+      status === 'voided' ? 'Void Payment' : 'Refund Payment',
+      `Enter a reason for the ${label} (optional):`
+    )
     if (note === null) return // cancelled
     try {
       const result = await window.electronAPI.updatePaymentStatus(payment.id, status, note || undefined)
@@ -1265,8 +1345,8 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           memberPayments={memberPayments}
           paymentsLoading={paymentsLoading}
           isAdmin={isAdmin}
-          autoRenew={formAutoRenew}
-          onAutoRenewChange={setFormAutoRenew}
+          isMember={formIsMember}
+          onIsMemberChange={setFormIsMember}
           refs={{ fileInputRef, nameRef, planRef, waiverRef, paymentRef, transactionRefRef }}
           onMemberIdChange={handleMemberIdChange}
           onPhotoUpload={handlePhotoUpload}
@@ -1340,6 +1420,29 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
           onClose={() => setUnfreezeTarget(null)}
           onUnfreeze={confirmUnfreeze}
         />
+      )}
+
+      {/* Text-input prompt (window.prompt is unsupported in Electron) */}
+      {inputPrompt && (
+        <div className="confirm-overlay" onClick={cancelTextPrompt}>
+          <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="confirm-title">{inputPrompt.title}</h2>
+            <p className="confirm-message">{inputPrompt.message}</p>
+            <input
+              ref={inputPromptRef}
+              type="text"
+              className="input"
+              value={inputPromptValue}
+              onChange={(e) => setInputPromptValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitTextPrompt() }}
+              style={{ width: '100%', marginBottom: 20, textAlign: 'left' }}
+            />
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={cancelTextPrompt}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitTextPrompt}>OK</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Daily Member Modal — quick enrollment with name, waiver, fingerprint, plan, payment */}

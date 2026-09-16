@@ -15,6 +15,10 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
   const [showForm, setShowForm] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
+  // P4: global one-time membership registration cost (a setting, not per-plan)
+  const [membershipCost, setMembershipCost] = useState(0)
+  const [editingCost, setEditingCost] = useState(false)
+  const [costInput, setCostInput] = useState('')
   // Numeric fields are kept as raw strings while editing — a controlled
   // number input that coerces with Number() snaps back on every keystroke
   // (e.g. '1500.' → 1500), and Chromium can even refuse to type into a field
@@ -25,6 +29,10 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
     duration_days: '30',
     sessions: '0',
     price: '',
+    // P4: members-only plan — only registered members can avail it
+    members_only: false,
+    // P4: members-only promo price (empty = no promo)
+    promo_price: '',
   })
 
   useEffect(() => {
@@ -35,8 +43,30 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
     try {
       const data = await window.electronAPI.getPlans()
       setPlans(data)
+      const cost = await window.electronAPI.getSetting('membership_cost')
+      setMembershipCost(Number(cost) || 0)
     } catch (error) {
       console.error('Failed to load plans:', error)
+    }
+  }
+
+  // P4: persist the global membership cost (admin-only — the edit affordance is
+  // rendered only for admins)
+  const saveMembershipCost = async () => {
+    const n = Number(costInput)
+    if (costInput.trim() === '' || !Number.isFinite(n) || n < 0) {
+      showToast('error', 'Membership cost must be a non-negative number.')
+      return
+    }
+    try {
+      await window.electronAPI.saveSetting('membership_cost', String(n))
+      setMembershipCost(n)
+      setEditingCost(false)
+      log.updateSettings({ membership_cost: n })
+      showToast('success', `Membership cost set to ${formatMoney(n)}.`)
+    } catch (error: any) {
+      console.error('Failed to save membership cost:', error)
+      showToast('error', error?.message || 'Failed to save membership cost.')
     }
   }
 
@@ -47,6 +77,9 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
         duration_days: Number(formData.duration_days) || 0,
         sessions: Number(formData.sessions) || 0,
         price: Number(formData.price) || 0,
+        members_only: formData.members_only ? 1 : 0,
+        // Empty promo field = no promo (null)
+        promo_price: formData.promo_price.trim() !== '' ? (Number(formData.promo_price) || 0) : null,
       })
       setShowForm(false)
       resetForm()
@@ -67,6 +100,9 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
         duration_days: Number(formData.duration_days) || 0,
         sessions: Number(formData.sessions) || 0,
         price: Number(formData.price) || 0,
+        members_only: formData.members_only ? 1 : 0,
+        // Empty promo field = no promo (null)
+        promo_price: formData.promo_price.trim() !== '' ? (Number(formData.promo_price) || 0) : null,
       })
       setShowForm(false)
       setSelectedPlan(null)
@@ -79,6 +115,9 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       if (selectedPlan.name !== formData.name) changedFields.name = formData.name
       if (selectedPlan.price !== Number(formData.price)) changedFields.price = Number(formData.price)
       if (selectedPlan.type !== formData.type) changedFields.type = formData.type
+      if (!!selectedPlan.members_only !== formData.members_only) changedFields.members_only = formData.members_only
+      const newPromo = formData.promo_price.trim() !== '' ? (Number(formData.promo_price) || 0) : null
+      if (Number(selectedPlan.promo_price ?? null) !== Number(newPromo ?? null)) changedFields.promo_price = newPromo
       if (Object.keys(changedFields).length > 0) {
         log.updatePlan(selectedPlan.id, formData.name, changedFields)
       }
@@ -111,6 +150,8 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       duration_days: '30',
       sessions: '0',
       price: '',
+      members_only: false,
+      promo_price: '',
     })
   }
 
@@ -122,6 +163,8 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
       duration_days: String(plan.duration_days || 30),
       sessions: String(plan.sessions || 0),
       price: String(plan.price ?? 0),
+      members_only: !!plan.members_only,
+      promo_price: plan.promo_price === null || plan.promo_price === undefined ? '' : String(plan.promo_price),
     })
     setShowForm(true)
   }
@@ -146,6 +189,60 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
         )}
       </div>
 
+      {/* P4: global one-time membership registration cost — always present, admin-only edit.
+          Charged when a client toggles "Is a Member" at enrollment, on top of the plan price. */}
+      <div className="membership-cost-card">
+        <div className="membership-cost-icon">🪪</div>
+        <div className="membership-cost-body">
+          <div className="membership-cost-title">Membership Cost</div>
+          <div className="membership-cost-desc">One-time fee when a client registers as a member — added on top of the plan price.</div>
+        </div>
+        <div className="membership-cost-value mono-text">{formatMoney(membershipCost)}</div>
+        {isAdmin && (
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              setCostInput(membershipCost > 0 ? String(membershipCost) : '')
+              setEditingCost(true)
+            }}
+            title="Edit membership cost"
+          >
+            ✎ Edit
+          </button>
+        )}
+      </div>
+      {editingCost && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">Edit Membership Cost</h2>
+              <button className="btn-icon" onClick={() => setEditingCost(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Membership Cost (one-time)</label>
+                <input
+                  type="number"
+                  className="input"
+                  value={costInput}
+                  onChange={(e) => setCostInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveMembershipCost() }}
+                  step="0.01"
+                  min="0"
+                  placeholder="0.00"
+                  autoFocus
+                />
+                <span className="field-hint">Charged once when a client toggles "Is a Member" at enrollment. Set 0 for free membership registration.</span>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setEditingCost(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveMembershipCost}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="plans-grid">
         {plans.length === 0 ? (
           <p className="empty-message">No plans created yet</p>
@@ -156,26 +253,61 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                 <span className={`plan-type-badge ${plan.type}`}>
                   {formatType(plan.type)}
                 </span>
-                {isAdmin && (
-                  <button
-                    className="btn-icon danger"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteTarget(plan)
-                    }}
-                    title="Delete"
-                  >
-                    ✕
-                  </button>
-                )}
+                <div className="plan-header-actions">
+                  {/* P4: members-only plan indicator */}
+                  {!!plan.members_only && (
+                    <span className="plan-members-badge" title="For members only — clients must register as members to avail this plan">
+                      🪪 Members Only
+                    </span>
+                  )}
+                  {/* P4: members-only promo indicator */}
+                  {plan.promo_price !== null && plan.promo_price !== undefined && (
+                    <span className="plan-promo-badge" title={`Members-only promo price: ${formatMoney(plan.promo_price)}`}>
+                      🏷️ PROMO
+                    </span>
+                  )}
+                  {isAdmin && (
+                    <button
+                      className="btn-icon"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openEditForm(plan)
+                      }}
+                      title="Edit plan"
+                    >
+                      ✎
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      className="btn-icon danger"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteTarget(plan)
+                      }}
+                      title="Delete"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
               <h3 className="plan-name display-text">{plan.name}</h3>
-              <div className="plan-price mono-text">{formatMoney(plan.price)}</div>
+              <div className="plan-price-row">
+                <div className="plan-price mono-text">{formatMoney(plan.price)}</div>
+                {/* P4: members-only promo price — shown struck-through vs the regular price */}
+                {plan.promo_price !== null && plan.promo_price !== undefined && (
+                  <div className="plan-promo-row">
+                    <span className="plan-promo-price mono-text">{formatMoney(plan.promo_price)}</span>
+                    <span className="plan-promo-note">Members promo</span>
+                  </div>
+                )}
+              </div>
               <div className="plan-details">
-                {plan.duration_days && (
+                {(plan.duration_days || 0) > 0 && (
                   <span>{plan.duration_days} days</span>
                 )}
-                {plan.sessions && (
+                {(plan.sessions || 0) > 0 && (
                   <span>{plan.sessions} sessions</span>
                 )}
               </div>
@@ -276,6 +408,38 @@ function Plans({ currentUser }: { currentUser?: StaffUser | null }) {
                     />
                   </div>
                 )}
+                {/* P4: members-only plan — only registered members can avail it */}
+                <div className="form-group form-toggle-section">
+                  <label className="toggle-row">
+                    <span className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={formData.members_only}
+                        onChange={(e) => setFormData({ ...formData, members_only: e.target.checked })}
+                      />
+                      <span className="toggle-track" aria-hidden="true" />
+                    </span>
+                    <span>Members Only</span>
+                  </label>
+                  <p className="field-hint">Only clients registered as members can avail this plan.</p>
+                </div>
+                {/* P4: members-only promo price — leave empty for no promo */}
+                <div className="form-group full-width">
+                  <label>Members-Only Promo Price</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={formData.promo_price}
+                    onChange={(e) => setFormData({ ...formData, promo_price: e.target.value })}
+                    step="0.01"
+                    min="0"
+                    placeholder="No promo"
+                  />
+                  <span className="field-hint">Leave empty for no promo. Only clients registered as members can avail this price.</span>
+                  {formData.promo_price.trim() !== '' && Number(formData.promo_price) > Number(formData.price || 0) && (
+                    <span className="field-required-hint">⚠️ Promo price is higher than the regular price — double-check</span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="modal-footer">

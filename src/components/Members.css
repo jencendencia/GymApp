@@ -1378,6 +1378,13 @@
   font-weight: 600;
 }
 
+/* P4: switch-style toggle section (Is a Member) — switch styles live in index.css */
+.form-toggle-section {
+  grid-column: 1 / -1;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
 .checkbox-row input[type="checkbox"] {
   width: 16px;
   height: 16px;
@@ -1420,6 +1427,12 @@
   padding: 3px 0;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* P4: members-only promo applied on a renewal — highlighted row with struck-through regular price */
+.newplan-payment-summary .summary-row.plan-promo-applied {
+  color: var(--warn, #ffb020);
+  font-weight: 600;
 }
 
 .newplan-payment-summary .summary-row.summary-total {
