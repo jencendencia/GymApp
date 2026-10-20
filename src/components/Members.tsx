@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './Members.css'
+import MemberAvatar from './MemberAvatar'
 import QRCode from 'qrcode'
-import { Member, Plan, Coach, StaffUser, Payment, WaiverTemplate } from '../types/electron'
+import { Member, Plan, Coach, StaffUser, Payment, WaiverTemplate, Checkin } from '../types/electron'
 import { log } from '../lib/logger'
 import { useToast } from '../lib/toast'
 import { todayLocal, todayLocalOf } from '../lib/dates'
 import { notifyDataChanged, useDataVersion } from '../lib/data'
-import { getCurrencySymbol } from '../lib/format'
+import { getCurrencySymbol, formatMoney } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
 import MembersTable from './members/MembersTable'
 import MemberFormModal, { MemberFormData, PaymentFormData, FingerprintState, emptyFingerprints } from './members/MemberFormModal'
@@ -38,7 +39,13 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
   const [plans, setPlans] = useState<Plan[]>([])
   const [coaches, setCoaches] = useState<Coach[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [memberTab, setMemberTab] = useState<'all' | 'expiring'>('all')
+  const [memberTab, setMemberTab] = useState<'all' | 'expiring' | 'expired'>('all')
+  // Expired tab: filter expired members by plan type (all / monthly / daily)
+  const [expiredFilter, setExpiredFilter] = useState<'all' | 'monthly' | 'daily'>('all')
+  // Member information modal: full profile + the member's check-in history
+  const [infoMember, setInfoMember] = useState<Member | null>(null)
+  const [infoCheckins, setInfoCheckins] = useState<Checkin[]>([])
+  const [infoCheckinsLoading, setInfoCheckinsLoading] = useState(false)
   const [memberPage, setMemberPage] = useState(0)
   const [totalMembers, setTotalMembers] = useState(0)
   const [membersLoading, setMembersLoading] = useState(false)
@@ -1217,6 +1224,32 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
 
   const expiringMembers = allMembers.filter(isExpiring)
 
+  // Expired tab list — derived from the full list, filtered by plan type
+  const expiredMembers = allMembers.filter(m => m.status === 'expired')
+  const expiredFiltered = expiredFilter === 'all'
+    ? expiredMembers
+    : expiredMembers.filter(m => m.plan_type === expiredFilter)
+
+  // Member Info modal: show the profile, then load the member's full check-in history
+  const openMemberInfo = async (member: Member) => {
+    setInfoMember(member)
+    setInfoCheckins([])
+    setInfoCheckinsLoading(true)
+    try {
+      const data = await window.electronAPI.getMemberCheckins(member.id)
+      setInfoCheckins(data)
+    } catch (error) {
+      console.error('Failed to load member check-in history:', error)
+    } finally {
+      setInfoCheckinsLoading(false)
+    }
+  }
+
+  // Check-in timestamps are stored UTC — parse with the same +Z convention as the rest of the app
+  const formatCheckinDate = (ts: string) => new Date(ts.replace(' ', 'T') + 'Z').toLocaleDateString()
+  const formatCheckinTime = (ts: string) =>
+    new Date(ts.replace(' ', 'T') + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+
   return (
     <div className="members-page">
       <div className="page-header">
@@ -1260,6 +1293,9 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
 
       <MembersTable
         memberTab={memberTab}
+        expiredMembers={expiredFiltered}
+        expiredFilter={expiredFilter}
+        onExpiredFilterChange={setExpiredFilter}
         members={members}
         expiringMembers={expiringMembers}
         totalMembers={totalMembers}
@@ -1271,6 +1307,7 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
         onTabChange={setMemberTab}
         onPageChange={setMemberPage}
         onOpenEdit={openEditForm}
+        onOpenInfo={openMemberInfo}
         onOpenIdCard={openIdCard}
         onOpenNewPlan={openNewPlanModal}
         onDelete={(m) => setDeleteTarget(m)}
@@ -1441,6 +1478,137 @@ function Members({ currentUser, initialSearch, onSearchConsumed }: { currentUser
             <div className="confirm-actions">
               <button className="btn btn-secondary" onClick={cancelTextPrompt}>Cancel</button>
               <button className="btn btn-primary" onClick={submitTextPrompt}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Member Information Modal — full profile + check-in history */}
+      {infoMember && (
+        <div className="modal-overlay" onClick={() => setInfoMember(null)}>
+          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">Member Information</h2>
+              <button className="btn-icon" onClick={() => setInfoMember(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {/* Identity header */}
+              <div className="member-info-head">
+                <MemberAvatar
+                  name={infoMember.name}
+                  photo={infoMember.photo}
+                  imgClassName="member-info-photo"
+                  fallbackClassName="member-info-avatar"
+                />
+                <div className="member-info-head-text">
+                  <span className="member-info-name display-text">{infoMember.name}</span>
+                  <span className="member-info-sub mono-text">{infoMember.member_id}</span>
+                  <div className="member-info-badges">
+                    {infoMember.frozen ? (
+                      <span className="status-badge frozen" title={infoMember.freeze_end ? `Frozen until ${new Date(infoMember.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                        ❄️ Frozen
+                      </span>
+                    ) : (
+                      <span className={`status-badge ${infoMember.status}`}>{infoMember.status}</span>
+                    )}
+                    {infoMember.is_member ? (
+                      <span className="member-badge" title="Registered member">🪪 Member</span>
+                    ) : null}
+                    {infoMember.coach_id ? (
+                      <span className="member-badge">🏋️ Coached</span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* All member information */}
+              <div className="member-info-grid">
+                {([
+                  ['Email', infoMember.email || '—'],
+                  ['Phone', infoMember.phone || '—'],
+                  ['Emergency Contact', infoMember.emergency_contact || '—'],
+                  ['Emergency Phone', infoMember.emergency_phone || '—'],
+                  ['Birthday', infoMember.birthday ? new Date(infoMember.birthday).toLocaleDateString() : '—'],
+                  ['Height', infoMember.height ?? '—'],
+                  ['Weight', infoMember.weight ?? '—'],
+                  ['Member Since', infoMember.created_at ? new Date(infoMember.created_at.replace(' ', 'T')).toLocaleDateString() : '—'],
+                  ['Plan', getPlanName(infoMember.plan_id)],
+                  ['Plan Period', infoMember.plan_start || infoMember.plan_end
+                    ? `${infoMember.plan_start ? new Date(infoMember.plan_start).toLocaleDateString() : '—'} → ${infoMember.plan_end ? new Date(infoMember.plan_end).toLocaleDateString() : 'No end'}`
+                    : '—'],
+                  ['Balance', formatMoney(infoMember.balance || 0)],
+                  ['Sessions Used', String(infoMember.sessions_used ?? 0)],
+                  ['Coach', infoMember.coach_name || '—'],
+                  ['Coaching Period', infoMember.coaching_start || infoMember.coaching_end
+                    ? `${infoMember.coaching_start ? new Date(infoMember.coaching_start).toLocaleDateString() : '—'} → ${infoMember.coaching_end ? new Date(infoMember.coaching_end).toLocaleDateString() : 'No end'}`
+                    : '—'],
+                  ['Coaching Fee Type', infoMember.coach_id
+                    ? (infoMember.coach_fee_type === 'daily' ? 'Daily (sessions)' : 'Monthly')
+                    : '—'],
+                  ['Auto-Renew', infoMember.auto_renew ? 'On' : 'Off'],
+                  ['Waiver', infoMember.waiver_agreed_at
+                    ? `Signed ${new Date(infoMember.waiver_agreed_at.replace(' ', 'T')).toLocaleDateString()}`
+                    : 'Not signed'],
+                  ['Referral Points', String(infoMember.points ?? 0)],
+                  ['Referred By', infoMember.referrer_id ? `Member #${infoMember.referrer_id}` : '—'],
+                  ['Freeze', infoMember.frozen
+                    ? `${infoMember.freeze_days ?? ''} day${infoMember.freeze_days === 1 ? '' : 's'}${infoMember.freeze_end ? ` — until ${new Date(infoMember.freeze_end).toLocaleDateString()}` : ''}`
+                    : '—'],
+                ] as [string, string][]).map(([label, value]) => (
+                  <div className="member-info-item" key={label}>
+                    <span className="member-info-label">{label}</span>
+                    <span className="member-info-value">{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Check-in history */}
+              <div className="member-info-checkins">
+                <h3 className="section-label">Check-in History</h3>
+                {infoCheckinsLoading ? (
+                  <p className="member-info-muted">Loading check-in history…</p>
+                ) : infoCheckins.length === 0 ? (
+                  <p className="member-info-muted">No check-ins recorded for this member yet</p>
+                ) : (
+                  <div className="member-info-checkins-table">
+                    <table className="members-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Time</th>
+                          <th>Method</th>
+                          <th>Checked Out</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {infoCheckins.map((checkin) => (
+                          <tr key={checkin.id}>
+                            <td className="mono-text">{formatCheckinDate(checkin.timestamp)}</td>
+                            <td className="mono-text">{formatCheckinTime(checkin.timestamp)}</td>
+                            <td>
+                              {checkin.method === 'fingerprint' ? 'Fingerprint' : 'Manual'}
+                              {checkin.status === 'override' && <span className="text-faint"> (override)</span>}
+                            </td>
+                            <td className="mono-text">
+                              {checkin.checked_out_at
+                                ? `${formatCheckinDate(checkin.checked_out_at)} ${formatCheckinTime(checkin.checked_out_at)}`
+                                : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <span className="member-info-muted">
+                {infoCheckins.length === 0
+                  ? 'No check-ins on record'
+                  : `${infoCheckins.length} check-in${infoCheckins.length !== 1 ? 's' : ''} on record`}
+              </span>
+              <button className="btn btn-secondary" onClick={() => setInfoMember(null)}>Close</button>
             </div>
           </div>
         </div>

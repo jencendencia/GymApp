@@ -32,6 +32,7 @@ export interface ElectronAPI {
   // Check-ins
   getCheckins: (date?: string, opts?: { offset?: number; limit?: number }) => Promise<Checkin[]>
   getCheckinsCount: (date?: string) => Promise<number>
+  getMemberCheckins: (memberId: number, limit?: number) => Promise<Checkin[]>
   createCheckin: (checkin: CreateCheckinInput) => Promise<{ success: boolean; reason?: string; message?: string; id?: number }>
   getActiveCheckins: () => Promise<ActiveCheckin[]>
   checkoutMember: (checkinId: number) => Promise<{ success: boolean }>
@@ -409,11 +410,19 @@ export interface ReportCoachSummary {
   totalCollected: number
 }
 
+export interface ReportMemberTypeSplit {
+  bucket: 'monthly' | 'daily' | 'other'
+  count: number
+  total: number
+}
+
 export interface DailyReport {
   date: string
   totalRevenue: number
   byType: { type: string; count: number; total: number }[]
   byMethod: { payment_method: string; count: number; total: number }[]
+  /** Payments split by the paying member's plan type: monthly vs daily vs other. */
+  byMemberType: ReportMemberTypeSplit[]
   transactions: Payment[]
   newMembers: number
   renewals: number
@@ -428,6 +437,37 @@ export interface MonthlyReportWeek {
   count: number
 }
 
+export interface ReportNewMember {
+  id: number
+  member_id: string
+  name: string
+  plan_name?: string
+  created_at: string
+}
+
+export interface ReportRenewal {
+  payment_id: number
+  id: number
+  member_id: string
+  name: string
+  plan_name?: string
+  amount: number
+  created_at: string
+}
+
+/** One coach's monthly coaching availments, split by fee type. */
+export interface CoachAvailment {
+  coach_id: number
+  coach_name: string
+  fee_type: 'monthly' | 'daily'
+  /** The coach's rate for this fee type (professional_fee / professional_fee_daily). */
+  fee: number
+  /** Members whose first-ever payment to this coach was this month. */
+  new_count: number
+  /** Members who had paid this coach before and paid again this month. */
+  renewed_count: number
+}
+
 export interface MonthlyReport {
   yearMonth: string
   totalRevenue: number
@@ -436,6 +476,8 @@ export interface MonthlyReport {
   weekly: MonthlyReportWeek[]
   byPlanType: { plan_type: string; count: number; total: number }[]
   byMethod: { payment_method: string; count: number; total: number }[]
+  /** Payments split by the paying member's plan type: monthly vs daily vs other. */
+  byMemberType: ReportMemberTypeSplit[]
   newMembers: number
   renewals: number
   churned: number
@@ -444,6 +486,12 @@ export interface MonthlyReport {
   activeMemberCount: number
   avgRevenuePerMember: number
   coaches: ReportCoachSummary[]
+  /** Members who joined this month (matches the newMembers count). */
+  newMemberList: ReportNewMember[]
+  /** Members whose plan was renewed this month (matches the renewals count). */
+  renewedList: ReportRenewal[]
+  /** Who availed coaching this month, split monthly vs daily. */
+  coachAvailments: CoachAvailment[]
 }
 
 export interface CoachFeePayment {
@@ -456,6 +504,8 @@ export interface CoachFeePayment {
   member_name?: string
   member_code?: string
   coach_name?: string
+  /** Paying member's coaching fee type — used to split daily vs monthly totals in Payment Tracking. */
+  coach_fee_type?: 'monthly' | 'daily'
 }
 
 export interface CreateCoachFeePaymentInput {

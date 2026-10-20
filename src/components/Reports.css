@@ -537,6 +537,124 @@
   font-weight: 600;
 }
 
+/* New / Renewed member lists on the Reports page (monthly view) */
+.member-report-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.member-report-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.member-report-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.member-report-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-report-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.member-report-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.member-report-amount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.member-report-date {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+/* Coaching availments split tables (Monthly / Daily Coached Members) */
+.availments-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.availments-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.availments-block .panel-title {
+  margin-bottom: 12px;
+}
+
+.availments-table-wrap {
+  overflow-x: auto;
+}
+
+.availments-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.availments-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.availments-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.availments-table th.amt,
+.availments-table td.amt {
+  text-align: right;
+}
+
+.availments-table tr:last-child td {
+  border-bottom: none;
+}
+
+.availments-total td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}
+
 .outstanding-list {
   display: flex;
   flex-direction: column;

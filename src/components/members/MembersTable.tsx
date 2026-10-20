@@ -4,7 +4,7 @@ import { formatMoney } from '../../lib/format'
 import MemberAvatar from '../MemberAvatar'
 
 interface MembersTableProps {
-  memberTab: 'all' | 'expiring'
+  memberTab: 'all' | 'expiring' | 'expired'
   members: Member[]
   expiringMembers: Member[]
   totalMembers: number
@@ -13,9 +13,15 @@ interface MembersTableProps {
   loading: boolean
   isAdmin: boolean
   getPlanName: (planId?: number) => string
-  onTabChange: (tab: 'all' | 'expiring') => void
+  onTabChange: (tab: 'all' | 'expiring' | 'expired') => void
+  /** Expired members (already filtered by plan type) + the current filter. */
+  expiredMembers: Member[]
+  expiredFilter: 'all' | 'monthly' | 'daily'
+  onExpiredFilterChange: (filter: 'all' | 'monthly' | 'daily') => void
   onPageChange: (page: number) => void
   onOpenEdit: (member: Member) => void
+  /** Open the Member Information modal (full profile + check-in history). */
+  onOpenInfo: (member: Member) => void
   onOpenIdCard: (member: Member) => void
   onOpenNewPlan: (member: Member) => void
   onDelete: (member: Member) => void
@@ -43,15 +49,16 @@ const DayCell = ({ member }: { member: Member }) => {
 /** Presentational members tables (all + expiring) with tabs and pagination (P2 6.6). */
 function MembersTable(props: MembersTableProps) {
   const {
-    memberTab, members, expiringMembers, totalMembers, memberPage, pageSize, loading,
+    memberTab, members, expiringMembers, expiredMembers, expiredFilter, onExpiredFilterChange, totalMembers, memberPage, pageSize, loading,
     isAdmin, getPlanName, onTabChange, onPageChange,
-    onOpenEdit, onOpenIdCard, onOpenNewPlan, onDelete, onShowQr,
+    onOpenEdit, onOpenInfo, onOpenIdCard, onOpenNewPlan, onDelete, onShowQr,
     onFreeze, onUnfreeze,
   } = props
 
   // Match the original split: all-tab shows ID card (no QR), expiring-tab shows QR (no ID card)
   const renderActions = (member: Member, showQr: boolean, showIdCard: boolean) => (
     <div className="table-actions">
+      <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onOpenInfo(member) }} title="Member Information">ℹ️</button>
       {showQr && (
         <button className="btn-icon" onClick={(e) => { e.stopPropagation(); onShowQr(member) }} title="Show QR Code">⬒</button>
       )}
@@ -117,6 +124,9 @@ function MembersTable(props: MembersTableProps) {
         </button>
         <button className={`member-tab ${memberTab === 'expiring' ? 'active' : ''}`} onClick={() => onTabChange('expiring')}>
           Expiring Members {expiringMembers.length > 0 && <span className="expiring-badge">{expiringMembers.length}</span>}
+        </button>
+        <button className={`member-tab ${memberTab === 'expired' ? 'active' : ''}`} onClick={() => onTabChange('expired')}>
+          Expired Members {expiredMembers.length > 0 && <span className="expiring-badge">{expiredMembers.length}</span>}
         </button>
       </div>
 
@@ -251,6 +261,89 @@ function MembersTable(props: MembersTableProps) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {memberTab === 'expired' && (
+        <>
+          {/* Plan-type filter: All / Monthly / Daily */}
+          <div className="members-expired-filter">
+            <label htmlFor="expired-plan-filter">Plan Type</label>
+            <select
+              id="expired-plan-filter"
+              className="input"
+              value={expiredFilter}
+              onChange={(e) => onExpiredFilterChange(e.target.value as 'all' | 'monthly' | 'daily')}
+            >
+              <option value="all">All</option>
+              <option value="monthly">Monthly</option>
+              <option value="daily">Daily</option>
+            </select>
+          </div>
+
+          <div className="members-table-container">
+            <table className="members-table">
+              <thead>
+                <tr>
+                  <th>Photo</th>
+                  <th>Member ID</th>
+                  <th>Member Since</th>
+                  <th>Name</th>
+                  <th>Plan</th>
+                  <th>Expiry Date</th>
+                  <th>Expired</th>
+                  <th>Status</th>
+                  <th>Waiver</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skeletonRows}
+                {!skeletonRows && expiredMembers.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="empty-row">
+                      {expiredFilter === 'all'
+                        ? 'No expired members'
+                        : `No expired ${expiredFilter} members`}
+                    </td>
+                  </tr>
+                ) : (
+                  expiredMembers.map((member) => {
+                    const expiryDate = member.plan_end || member.coaching_end || ''
+                    const daysAgo = expiryDate
+                      ? Math.max(0, Math.ceil((Date.now() - new Date(expiryDate).getTime()) / (1000 * 60 * 60 * 24)))
+                      : null
+                    return (
+                      <tr key={member.id} onClick={() => onOpenEdit(member)}>
+                        <td>{renderPhoto(member)}</td>
+                        <td className="mono-text">{member.member_id}</td>
+                        <td className="mono-text">{member.created_at ? new Date(member.created_at).toLocaleDateString() : '—'}</td>
+                        <td>{member.name}{renderMemberBadge(member)}</td>
+                        <td>{getPlanName(member.plan_id)}</td>
+                        <td className="mono-text">{expiryDate ? new Date(expiryDate).toLocaleDateString() : 'N/A'}</td>
+                        <td className="mono-text">
+                          <span className="status-badge expired">
+                            {daysAgo === null ? 'Expired' : daysAgo === 0 ? 'Expired today' : `${daysAgo}d ago`}
+                          </span>
+                        </td>
+                        <td>
+                          {member.frozen ? (
+                            <span className="status-badge frozen" title={member.freeze_end ? `Frozen until ${new Date(member.freeze_end).toLocaleDateString()}` : 'Frozen'}>
+                              ❄️ Frozen
+                            </span>
+                          ) : (
+                            <span className={`status-badge ${member.status}`}>{member.status}</span>
+                          )}
+                        </td>
+                        <td>{renderWaiver(member)}</td>
+                        <td>{renderActions(member, true, true)}</td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </>
   )

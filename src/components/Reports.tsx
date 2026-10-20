@@ -142,6 +142,10 @@ const [reminderState, setReminderState] = useState<{ sending: boolean; result: s
     return new Date(ts.replace(' ', 'T') + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
   }
 
+  // Local calendar date for a stored UTC timestamp (report list "Joined"/"Date" columns)
+  const fmtTimestampDate = (ts: string) =>
+    new Date(ts.replace(' ', 'T') + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
   // ── Breakdown bar component ──
   const BreakdownBar = ({ label, amount, total, color }: { label: string; amount: number; total: number; color: string }) => {
     const pct = total > 0 ? (amount / total) * 100 : 0
@@ -158,6 +162,46 @@ const [reminderState, setReminderState] = useState<{ sending: boolean; result: s
           />
         </div>
         <span className="breakdown-bar-pct mono-text">{pct.toFixed(1)}%</span>
+      </div>
+    )
+  }
+
+  // ── Payments split panel: monthly vs daily members (daily + monthly views) ──
+  const PaymentsSplitPanel = ({ rows }: { rows: { bucket: string; count: number; total: number }[] }) => {
+    const total = rows.reduce((s, r) => s + r.total, 0)
+    const count = rows.reduce((s, r) => s + r.count, 0)
+    const label = (b: string) => (b === 'monthly' ? 'Monthly Members' : b === 'daily' ? 'Daily Members' : 'Other Plans')
+    return (
+      <div className="availments-block" style={{ marginBottom: 16 }}>
+        <h3 className="panel-title">Payments — Monthly vs Daily Members</h3>
+        <div className="availments-table-wrap">
+          <table className="availments-table">
+            <thead>
+              <tr>
+                <th>Membership</th>
+                <th>Transactions</th>
+                <th className="amt">Total</th>
+                <th className="amt">Share</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.bucket}>
+                  <td>{label(r.bucket)}</td>
+                  <td className="mono-text">{r.count}</td>
+                  <td className="mono-text amt">{fmtCurrency(r.total)}</td>
+                  <td className="mono-text amt">{total > 0 ? ((r.total / total) * 100).toFixed(1) : '0.0'}%</td>
+                </tr>
+              ))}
+              <tr className="availments-total">
+                <td>Total</td>
+                <td className="mono-text">{count}</td>
+                <td className="mono-text amt">{fmtCurrency(total)}</td>
+                <td className="mono-text amt">100%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     )
   }
@@ -374,6 +418,56 @@ const [reminderState, setReminderState] = useState<{ sending: boolean; result: s
       )}`
     }
 
+    // ── Helper: New / Renewed member list tables (monthly only) ──
+    const memberListsHtml = () => {
+      const nm = monthlyReport?.newMemberList || []
+      const rn = monthlyReport?.renewedList || []
+      let out = ''
+      if (nm.length > 0) {
+        out += `<div class="section-title">New Members (${nm.length})</div>\n${buildTable(
+          ['Member ID', 'Member Name', 'Plan', 'Joined'],
+          nm.map(m => [m.member_id, m.name, m.plan_name || '—', fmtTimestampDate(m.created_at)])
+        )}`
+      }
+      if (rn.length > 0) {
+        out += `<div class="section-title">Renewed Members (${rn.length})</div>\n${buildTable(
+          ['Member ID', 'Member Name', 'Plan', 'Amount', 'Date'],
+          rn.map(r => [r.member_id, r.name, r.plan_name || '—', fmtCurrency(r.amount), fmtTimestampDate(r.created_at)]),
+          ['Total Renewals', '', '', fmtCurrency(rn.reduce((s, r) => s + (r.amount || 0), 0)), '']
+        )}`
+      }
+      return out
+    }
+
+    // ── Helper: Coaching availments split — Monthly Coached / Daily Coached tables ──
+    // Total per the report spec: (New + Renewed) × the coach's fee for that type.
+    const availmentsTableHtml = (feeType: 'monthly' | 'daily') => {
+      const rows = (monthlyReport?.coachAvailments || []).filter(a => a.fee_type === feeType)
+      if (rows.length === 0) return ''
+      const totalNew = rows.reduce((s, a) => s + a.new_count, 0)
+      const totalRenewed = rows.reduce((s, a) => s + a.renewed_count, 0)
+      const grandTotal = rows.reduce((s, a) => s + (a.new_count + a.renewed_count) * a.fee, 0)
+      return `<div class="section-title">${feeType === 'monthly' ? 'Monthly Coached Members' : 'Daily Coached Members'}</div>\n${buildTable(
+        ['Coach', 'Fee', 'New', 'Renewed', 'Total'],
+        rows.map(a => [a.coach_name, fmtCurrency(a.fee), String(a.new_count), String(a.renewed_count), fmtCurrency((a.new_count + a.renewed_count) * a.fee)]),
+        ['Total', '', String(totalNew), String(totalRenewed), fmtCurrency(grandTotal)]
+      )}`
+    }
+
+    // ── Helper: Payments split by member plan type (monthly vs daily) ──
+    const memberTypePaymentsHtml = () => {
+      const rows = (view === 'daily' ? dailyReport?.byMemberType : monthlyReport?.byMemberType) || []
+      if (rows.length === 0) return ''
+      const total = rows.reduce((s, r) => s + r.total, 0)
+      const totalCount = rows.reduce((s, r) => s + r.count, 0)
+      const label = (b: string) => (b === 'monthly' ? 'Monthly Members' : b === 'daily' ? 'Daily Members' : 'Other Plans')
+      return `<div class="section-title">Payments — Monthly vs Daily Members</div>\n${buildTable(
+        ['Membership', 'Transactions', 'Total', 'Share'],
+        rows.map(r => [label(r.bucket), String(r.count), fmtCurrency(r.total), total > 0 ? `${((r.total / total) * 100).toFixed(1)}%` : '0.0%']),
+        ['Total', String(totalCount), fmtCurrency(total), '100%']
+      )}`
+    }
+
     let html: string
     const daily = dailyReport
     const monthly = monthlyReport
@@ -405,6 +499,8 @@ ${buildTable(
   daily.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]),
   ['Total', String(daily.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)]
 )}
+
+${memberTypePaymentsHtml()}
 
 ${daily.outstanding.length > 0 ? `
 <div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances</div>
@@ -473,6 +569,8 @@ ${buildTable(
   ['Total', String(monthly.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.byMethod.reduce((s, i) => s + i.total, 0))]
 )}
 
+${memberTypePaymentsHtml()}
+
 ${monthly.outstanding.length > 0 ? `
 <div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances (as of Month-End)</div>
 ${buildTable(
@@ -490,6 +588,11 @@ ${buildTable(
 </table>
 
 ${coachTableHtml(monthly.coaches, 'Collected This Month')}
+
+${memberListsHtml()}
+
+${availmentsTableHtml('monthly')}
+${availmentsTableHtml('daily')}
 
 <div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
@@ -704,6 +807,72 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
         </div>`
     })()
 
+    // ── New / Renewed member lists + coaching availments (monthly only) ──
+    const memberListsPdf = !isDaily ? (() => {
+      const nm = mr.newMemberList || []
+      const rn = mr.renewedList || []
+      let out = ''
+      if (nm.length > 0) {
+        out += `<div class="section">
+          <h2 class="section-title">New Members (${nm.length})</h2>
+          <table class="data-table">
+            <thead><tr><th>Member ID</th><th>Member Name</th><th>Plan</th><th>Joined</th></tr></thead>
+            <tbody>${nm.map(m => `<tr><td class="mono">${esc(m.member_id)}</td><td>${esc(m.name)}</td><td>${esc(m.plan_name || '—')}</td><td class="mono">${esc(fmtTimestampDate(m.created_at))}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>`
+      }
+      if (rn.length > 0) {
+        out += `<div class="section">
+          <h2 class="section-title">Renewed Members (${rn.length})</h2>
+          <table class="data-table">
+            <thead><tr><th>Member ID</th><th>Member Name</th><th>Plan</th><th class="amt">Amount</th><th>Date</th></tr></thead>
+            <tbody>
+              ${rn.map(r => `<tr><td class="mono">${esc(r.member_id)}</td><td>${esc(r.name)}</td><td>${esc(r.plan_name || '—')}</td><td class="mono amt">${fmtCurrency(r.amount)}</td><td class="mono">${esc(fmtTimestampDate(r.created_at))}</td></tr>`).join('')}
+              <tr><td><strong>Total Renewals</strong></td><td></td><td></td><td class="mono amt"><strong>${fmtCurrency(rn.reduce((s, r) => s + (r.amount || 0), 0))}</strong></td><td></td></tr>
+            </tbody>
+          </table>
+        </div>`
+      }
+      return out
+    })() : ''
+
+    const availmentsPdf = !isDaily ? (['monthly', 'daily'] as const).map(feeType => {
+      const rows = mr.coachAvailments.filter(a => a.fee_type === feeType)
+      if (rows.length === 0) return ''
+      const totalNew = rows.reduce((s, a) => s + a.new_count, 0)
+      const totalRenewed = rows.reduce((s, a) => s + a.renewed_count, 0)
+      const grandTotal = rows.reduce((s, a) => s + (a.new_count + a.renewed_count) * a.fee, 0)
+      return `<div class="section">
+          <h2 class="section-title">${feeType === 'monthly' ? 'Monthly Coached Members' : 'Daily Coached Members'}</h2>
+          <table class="data-table">
+            <thead><tr><th>Coach</th><th class="amt">Fee</th><th>New</th><th>Renewed</th><th class="amt">Total</th></tr></thead>
+            <tbody>
+              ${rows.map(a => `<tr><td>${esc(a.coach_name)}</td><td class="mono amt">${fmtCurrency(a.fee)}</td><td class="mono">${a.new_count}</td><td class="mono">${a.renewed_count}</td><td class="mono amt">${fmtCurrency((a.new_count + a.renewed_count) * a.fee)}</td></tr>`).join('')}
+              <tr><td><strong>Total</strong></td><td></td><td class="mono"><strong>${totalNew}</strong></td><td class="mono"><strong>${totalRenewed}</strong></td><td class="mono amt"><strong>${fmtCurrency(grandTotal)}</strong></td></tr>
+            </tbody>
+          </table>
+        </div>`
+    }).join('') : ''
+
+    // ── Payments split: monthly vs daily members ──
+    const memberTypeSplitPdf = (() => {
+      const rows = (isDaily ? dr.byMemberType : mr.byMemberType) || []
+      if (rows.length === 0) return ''
+      const total = rows.reduce((s, r) => s + r.total, 0)
+      const totalCount = rows.reduce((s, r) => s + r.count, 0)
+      const label = (b: string) => (b === 'monthly' ? 'Monthly Members' : b === 'daily' ? 'Daily Members' : 'Other Plans')
+      return `<div class="section">
+          <h2 class="section-title">Payments — Monthly vs Daily Members</h2>
+          <table class="data-table">
+            <thead><tr><th>Membership</th><th>Transactions</th><th class="amt">Total</th><th class="amt">Share</th></tr></thead>
+            <tbody>
+              ${rows.map(r => `<tr><td>${label(r.bucket)}</td><td class="mono">${r.count}</td><td class="mono amt">${fmtCurrency(r.total)}</td><td class="mono amt">${total > 0 ? ((r.total / total) * 100).toFixed(1) : '0.0'}%</td></tr>`).join('')}
+              <tr><td><strong>Total</strong></td><td class="mono"><strong>${totalCount}</strong></td><td class="mono amt"><strong>${fmtCurrency(total)}</strong></td><td class="mono amt"><strong>100%</strong></td></tr>
+            </tbody>
+          </table>
+        </div>`
+    })()
+
     // ── Monthly summary meta ──
     const monthlyMeta = !isDaily
       ? `<div class="section">
@@ -879,12 +1048,16 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
     <div class="bb-list">${methodBreakdown}</div>
   </div>
 
+  ${memberTypeSplitPdf}
+
   ${weeklyTrend}
   ${monthlyMeta}
   ${outstandingSection}
   ${monthlyOutstanding}
   ${transactionTable}
   ${coachSectionPdf}
+  ${memberListsPdf}
+  ${availmentsPdf}
 
   <div class="footer">${esc(appName)} — ${title} — Generated by ${esc(generatedBy)}</div>
 </body>
@@ -1256,6 +1429,10 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
               </div>
             )}
 
+            {view === 'daily' && dailyReport && (
+              <PaymentsSplitPanel rows={dailyReport.byMemberType} />
+            )}
+
             {view === 'monthly' && monthlyReport && (
               <div className="breakdown-grid">
                 <div className="breakdown-panel">
@@ -1304,9 +1481,111 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
               </div>
             )}
 
+            {view === 'monthly' && monthlyReport && (
+              <PaymentsSplitPanel rows={monthlyReport.byMemberType} />
+            )}
+
+            {/* ── New & Renewed members (monthly) ── */}
+            {view === 'monthly' && monthlyReport && (
+              <div className="breakdown-grid">
+                <div className="breakdown-panel">
+                  <h3 className="panel-title">New Members ({monthlyReport.newMemberList.length})</h3>
+                  {monthlyReport.newMemberList.length === 0 ? (
+                    <p className="empty-breakdown">No new members this month</p>
+                  ) : (
+                    <div className="member-report-list">
+                      {monthlyReport.newMemberList.map(nm => (
+                        <div key={nm.id} className="member-report-item">
+                          <div className="member-report-info">
+                            <span className="member-report-name">{nm.name}</span>
+                            <span className="mono-text member-report-meta">{nm.member_id} · {nm.plan_name || 'No plan'}</span>
+                          </div>
+                          <span className="mono-text member-report-date">
+                            {new Date(nm.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="breakdown-panel">
+                  <h3 className="panel-title">Renewed Members ({monthlyReport.renewedList.length})</h3>
+                  {monthlyReport.renewedList.length === 0 ? (
+                    <p className="empty-breakdown">No renewals this month</p>
+                  ) : (
+                    <div className="member-report-list">
+                      {monthlyReport.renewedList.map(rn => (
+                        <div key={rn.payment_id} className="member-report-item">
+                          <div className="member-report-info">
+                            <span className="member-report-name">{rn.name}</span>
+                            <span className="mono-text member-report-meta">{rn.member_id} · {rn.plan_name || 'No plan'}</span>
+                          </div>
+                          <div className="member-report-right">
+                            <span className="mono-text member-report-amount">{fmtCurrency(rn.amount)}</span>
+                            <span className="mono-text member-report-date">{fmtTimestampDate(rn.created_at)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* ── Coach Report section (monthly) ── */}
             {view === 'monthly' && monthlyReport && (
               <CoachReportSection coaches={monthlyReport.coaches} periodLabel="Collected This Month" />
+            )}
+
+            {/* ── Coaching availments split: Monthly / Daily (monthly) ── */}
+            {view === 'monthly' && monthlyReport && monthlyReport.coachAvailments.length > 0 && (
+              <div className="availments-panel">
+                {(['monthly', 'daily'] as const).map(feeType => {
+                  const rows = monthlyReport.coachAvailments.filter(a => a.fee_type === feeType)
+                  if (rows.length === 0) return null
+                  const totalNew = rows.reduce((s, a) => s + a.new_count, 0)
+                  const totalRenewed = rows.reduce((s, a) => s + a.renewed_count, 0)
+                  const grandTotal = rows.reduce((s, a) => s + (a.new_count + a.renewed_count) * a.fee, 0)
+                  return (
+                    <div key={feeType} className="availments-block">
+                      <h3 className="panel-title">
+                        {feeType === 'monthly' ? 'Monthly Coached Members' : 'Daily Coached Members'}
+                      </h3>
+                      <div className="availments-table-wrap">
+                        <table className="availments-table">
+                          <thead>
+                            <tr>
+                              <th>Coach</th>
+                              <th className="amt">Fee</th>
+                              <th>New</th>
+                              <th>Renewed</th>
+                              <th className="amt">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(a => (
+                              <tr key={a.coach_id}>
+                                <td>{a.coach_name}</td>
+                                <td className="mono-text amt">{fmtCurrency(a.fee)}</td>
+                                <td className="mono-text">{a.new_count}</td>
+                                <td className="mono-text">{a.renewed_count}</td>
+                                <td className="mono-text amt">{fmtCurrency((a.new_count + a.renewed_count) * a.fee)}</td>
+                              </tr>
+                            ))}
+                            <tr className="availments-total">
+                              <td>Total</td>
+                              <td></td>
+                              <td className="mono-text">{totalNew}</td>
+                              <td className="mono-text">{totalRenewed}</td>
+                              <td className="mono-text amt">{fmtCurrency(grandTotal)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             )}
 
             {/* ── Outstanding Balances Panel (daily) ── */}
@@ -1535,6 +1814,55 @@ ${coachTableHtml(monthly.coaches, 'Collected This Month')}
                       )}`
                     }
 
+                    // ── Helper: New / Renewed member list tables (monthly only) ──
+                    const memberListsHtml = () => {
+                      const nm = monthlyReport?.newMemberList || []
+                      const rn = monthlyReport?.renewedList || []
+                      let out = ''
+                      if (nm.length > 0) {
+                        out += `<div class="section-title">New Members (${nm.length})</div>\n${buildTable(
+                          ['Member ID', 'Member Name', 'Plan', 'Joined'],
+                          nm.map(m => [m.member_id, m.name, m.plan_name || '—', fmtTimestampDate(m.created_at)])
+                        )}`
+                      }
+                      if (rn.length > 0) {
+                        out += `<div class="section-title">Renewed Members (${rn.length})</div>\n${buildTable(
+                          ['Member ID', 'Member Name', 'Plan', 'Amount', 'Date'],
+                          rn.map(r => [r.member_id, r.name, r.plan_name || '—', fmtCurrency(r.amount), fmtTimestampDate(r.created_at)]),
+                          ['Total Renewals', '', '', fmtCurrency(rn.reduce((s, r) => s + (r.amount || 0), 0)), '']
+                        )}`
+                      }
+                      return out
+                    }
+
+                    // ── Helper: Coaching availments split — Monthly / Daily Coached tables ──
+                    const availmentsTableHtml = (feeType: 'monthly' | 'daily') => {
+                      const rows = (monthlyReport?.coachAvailments || []).filter(a => a.fee_type === feeType)
+                      if (rows.length === 0) return ''
+                      const totalNew = rows.reduce((s, a) => s + a.new_count, 0)
+                      const totalRenewed = rows.reduce((s, a) => s + a.renewed_count, 0)
+                      const grandTotal = rows.reduce((s, a) => s + (a.new_count + a.renewed_count) * a.fee, 0)
+                      return `<div class="section-title">${feeType === 'monthly' ? 'Monthly Coached Members' : 'Daily Coached Members'}</div>\n${buildTable(
+                        ['Coach', 'Fee', 'New', 'Renewed', 'Total'],
+                        rows.map(a => [a.coach_name, fmtCurrency(a.fee), String(a.new_count), String(a.renewed_count), fmtCurrency((a.new_count + a.renewed_count) * a.fee)]),
+                        ['Total', '', String(totalNew), String(totalRenewed), fmtCurrency(grandTotal)]
+                      )}`
+                    }
+
+                    // ── Helper: Payments split by member plan type (monthly vs daily) ──
+                    const memberTypePaymentsHtml = () => {
+                      const rows = (view === 'daily' ? dailyReport?.byMemberType : monthlyReport?.byMemberType) || []
+                      if (rows.length === 0) return ''
+                      const total = rows.reduce((s, r) => s + r.total, 0)
+                      const totalCount = rows.reduce((s, r) => s + r.count, 0)
+                      const label = (b: string) => (b === 'monthly' ? 'Monthly Members' : b === 'daily' ? 'Daily Members' : 'Other Plans')
+                      return `<div class="section-title">Payments — Monthly vs Daily Members</div>\n${buildTable(
+                        ['Membership', 'Transactions', 'Total', 'Share'],
+                        rows.map(r => [label(r.bucket), String(r.count), fmtCurrency(r.total), total > 0 ? `${((r.total / total) * 100).toFixed(1)}%` : '0.0%']),
+                        ['Total', String(totalCount), fmtCurrency(total), '100%']
+                      )}`
+                    }
+
                     let html: string
                     const emailFilename = view === 'daily' && dailyReport
                       ? `${filePrefix}-daily-${dailyReport.date}.xls`
@@ -1556,6 +1884,7 @@ ${buildStatCards([
 ${buildTable(['Type', 'Transactions', 'Total'], daily.byType.map(i => [i.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(daily.byType.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)])}
 <div class="section-title">Revenue by Payment Method</div>
 ${buildTable(['Method', 'Transactions', 'Total'], daily.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(daily.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(daily.totalRevenue)])}
+${memberTypePaymentsHtml()}
 ${daily.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances</div>\n${buildTable(['Member', 'Member ID', 'Balance'], daily.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]), ['Total Outstanding', '', fmtCurrency(daily.outstanding.reduce((s, o) => s + o.balance, 0))])}` : ''}
 <div class="section-title">Transaction Details</div>
 ${buildTable(['Member', 'Member ID', 'Plan', 'Type', 'Method', 'Status', 'Amount', 'Time'], daily.transactions.map(t => {
@@ -1588,6 +1917,7 @@ ${monthly.weekly.length > 0 ? `\n<div class="section-title">Weekly Revenue Trend
 ${buildTable(['Plan Type', 'Count', 'Total'], monthly.byPlanType.map(i => [i.plan_type === 'no_plan' ? 'No Plan' : i.plan_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(monthly.byPlanType.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.totalRevenue)])}
 <div class="section-title">Revenue by Payment Method</div>
 ${buildTable(['Method', 'Count', 'Total'], monthly.byMethod.map(i => [i.payment_method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), String(i.count), fmtCurrency(i.total)]), ['Total', String(monthly.byMethod.reduce((s, i) => s + i.count, 0)), fmtCurrency(monthly.byMethod.reduce((s, i) => s + i.total, 0))])}
+${memberTypePaymentsHtml()}
 ${monthly.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c62828;border-color:#c62828;">Outstanding Balances (as of Month-End)</div>\n${buildTable(['Member', 'Member ID', 'Balance'], monthly.outstanding.map(o => [o.name, o.member_id, fmtCurrency(o.balance)]), ['Total Outstanding', '', fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))])}` : ''}
 <div class="section-title">Summary</div>
 <table class="summary-table">
@@ -1595,6 +1925,9 @@ ${monthly.outstanding.length > 0 ? `\n<div class="section-title" style="color:#c
 <tr><td><strong>Total Outstanding</strong></td><td class="danger">${fmtCurrency(monthly.outstanding.reduce((s, o) => s + o.balance, 0))}</td></tr>
 </table>
 ${coachTableHtml(monthly.coaches, 'Collected This Month')}
+${memberListsHtml()}
+${availmentsTableHtml('monthly')}
+${availmentsTableHtml('daily')}
 <div class="footer">Report generated ${now} — ${esc(appName)} — Generated by ${esc(generatedBy)}</div>
 </body></html>`
                     } else {

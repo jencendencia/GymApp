@@ -1185,6 +1185,28 @@ function createSmtpTransport() {
 }
 
 // Build the daily report payload (shared by the IPC handler and the auto-send scheduler)
+// Revenue split by the paying member's plan type: monthly vs daily vs other.
+// Used by the daily + monthly reports (page, XLS, PDF, email).
+function getPaymentsByMemberType(where: string, param: string) {
+  const rows = (db?.prepare(`
+    SELECT
+      CASE WHEN pl.type = 'monthly' THEN 'monthly'
+           WHEN pl.type = 'daily' THEN 'daily'
+           ELSE 'other' END as bucket,
+      COUNT(*) as count,
+      COALESCE(SUM(p.amount), 0) as total
+    FROM payments p
+    JOIN members m ON p.member_id = m.id
+    LEFT JOIN plans pl ON m.plan_id = pl.id
+    WHERE ${where} AND p.status = 'completed'
+    GROUP BY bucket
+  `).all(param) as any[]) || []
+  const byBucket: Record<string, { bucket: string; count: number; total: number }> = {}
+  for (const b of ['monthly', 'daily', 'other']) byBucket[b] = { bucket: b, count: 0, total: 0 }
+  for (const r of rows) byBucket[r.bucket] = { bucket: r.bucket, count: r.count, total: r.total }
+  return [byBucket.monthly, byBucket.daily, byBucket.other]
+}
+
 function getDailyReportData(date: string) {
   const today = date || todayLocal()
 
@@ -1204,6 +1226,8 @@ function getDailyReportData(date: string) {
     FROM payments WHERE DATE(created_at, 'localtime') = ? AND status = 'completed'
     GROUP BY payment_method
   `).all(today) as any[]) || []
+
+  const byMemberType = getPaymentsByMemberType("DATE(p.created_at, 'localtime') = ?", today)
 
   const transactions = (db?.prepare(`
     SELECT p.*, m.name as member_name, m.member_id as member_code, pl.name as plan_name
@@ -1256,6 +1280,7 @@ function getDailyReportData(date: string) {
     byType,
     byMethod,
     transactions,
+    byMemberType,
     newMembers: newMembersRow?.count || 0,
     renewals: renewalsRow?.count || 0,
     outstandingCount: outstanding.length,
@@ -2002,6 +2027,18 @@ function setupIPC() {
     return row?.count || 0
   })
 
+  // Member Information modal: full check-in history for one member (newest first)
+  ipcMain.handle('get-member-checkins', (_, memberId: number, limit?: number) => {
+    const cap = clampNumber(limit, 1, 500, 100)
+    return db?.prepare(`
+      SELECT id, member_id, timestamp, method, checked_out_at, status
+      FROM checkins
+      WHERE member_id = ?
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
+    `).all(memberId, cap) || []
+  })
+
   ipcMain.handle('get-active-checkins', () => {
     const today = todayLocal()
     return db?.prepare(`
@@ -2360,7 +2397,7 @@ function setupIPC() {
   // Coach Fee Payments
   ipcMain.handle('get-coach-fee-payments', (_, coachId: number) => {
     return db?.prepare(`
-      SELECT cfp.*, m.name as member_name, m.member_id as member_code, c.name as coach_name
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code, m.coach_fee_type, c.name as coach_name
       FROM coach_fee_payments cfp
       JOIN members m ON cfp.member_id = m.id
       JOIN coaches c ON cfp.coach_id = c.id
@@ -2388,7 +2425,7 @@ function setupIPC() {
   // Coach Payment Tracking
   ipcMain.handle('get-coach-payments-by-date', (_, coachId: number, date: string) => {
     const payments = db?.prepare(`
-      SELECT cfp.*, m.name as member_name, m.member_id as member_code
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code, m.coach_fee_type
       FROM coach_fee_payments cfp
       JOIN members m ON cfp.member_id = m.id
       WHERE cfp.coach_id = ? AND DATE(cfp.created_at) = ?
@@ -2418,7 +2455,7 @@ function setupIPC() {
 
   ipcMain.handle('get-coach-monthly-payments', (_, coachId: number, date: string) => {
     return db?.prepare(`
-      SELECT cfp.*, m.name as member_name, m.member_id as member_code
+      SELECT cfp.*, m.name as member_name, m.member_id as member_code, m.coach_fee_type
       FROM coach_fee_payments cfp
       JOIN members m ON cfp.member_id = m.id
       WHERE cfp.coach_id = ? AND strftime('%Y-%m', cfp.created_at) = strftime('%Y-%m', ?)
@@ -2826,6 +2863,66 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
         SELECT COUNT(*) as count FROM members WHERE status = 'active' AND archived = 0
       `).get() as any
 
+      // Revenue split: payments from monthly vs daily members this month
+      const byMemberType = getPaymentsByMemberType("strftime('%Y-%m', p.created_at, 'localtime') = ?", ym)
+
+      // New members this month — full list (matches the newMembers count above)
+      const newMemberList = db?.prepare(`
+        SELECT m.id, m.member_id, m.name, m.created_at, p.name as plan_name
+        FROM members m
+        LEFT JOIN plans p ON m.plan_id = p.id
+        WHERE DATE(m.created_at, 'localtime') >= ? AND DATE(m.created_at, 'localtime') < ?
+        ORDER BY m.created_at ASC, m.id ASC
+      `).all(monthStart, nextMonth) || []
+
+      // Renewed members this month — full list (matches the renewals count above)
+      const renewedList = db?.prepare(`
+        SELECT pay.id as payment_id, m.id, m.member_id, m.name, p.name as plan_name, pay.amount, pay.created_at
+        FROM payments pay
+        JOIN members m ON m.id = pay.member_id
+        LEFT JOIN plans p ON pay.plan_id = p.id
+        WHERE pay.type = 'renewal' AND strftime('%Y-%m', pay.created_at, 'localtime') = ?
+        ORDER BY pay.created_at ASC, pay.id ASC
+      `).all(ym) || []
+
+      // Coaching availments this month — one row per member/coach pair that paid
+      // this month, grouped by coach + fee type. "New" = the member's first-ever
+      // payment to that coach happened this month; "Renewed" = paid before.
+      const coachAvailmentRows = db?.prepare(`
+        SELECT cfp.coach_id, c.name as coach_name, c.professional_fee, c.professional_fee_daily,
+          CASE WHEN m.coach_fee_type = 'daily' THEN 'daily' ELSE 'monthly' END as fee_type,
+          MIN(DATE(cfp.created_at, 'localtime')) as first_paid_date,
+          SUM(CASE WHEN strftime('%Y-%m', cfp.created_at, 'localtime') = ? THEN 1 ELSE 0 END) as paid_this_month
+        FROM coach_fee_payments cfp
+        JOIN coaches c ON c.id = cfp.coach_id AND c.archived = 0
+        JOIN members m ON m.id = cfp.member_id
+        GROUP BY cfp.coach_id, cfp.member_id
+        HAVING paid_this_month > 0
+      `).all(ym) as any[] || []
+
+      const availmentAgg = new Map<string, { coach_id: number; coach_name: string; fee_type: 'monthly' | 'daily'; fee: number; new_count: number; renewed_count: number }>()
+      for (const row of coachAvailmentRows) {
+        const feeType: 'monthly' | 'daily' = row.fee_type === 'daily' ? 'daily' : 'monthly'
+        const fee = feeType === 'daily' ? (row.professional_fee_daily || 0) : (row.professional_fee || 0)
+        const isNew = row.first_paid_date >= monthStart && row.first_paid_date < nextMonth
+        const key = `${row.coach_id}|${feeType}`
+        const entry = availmentAgg.get(key) || {
+          coach_id: row.coach_id,
+          coach_name: row.coach_name,
+          fee_type: feeType,
+          fee,
+          new_count: 0,
+          renewed_count: 0,
+        }
+        if (isNew) entry.new_count += 1
+        else entry.renewed_count += 1
+        availmentAgg.set(key, entry)
+      }
+      const coachAvailments = Array.from(availmentAgg.values())
+        .sort((a, b) => (a.fee_type === b.fee_type
+          ? a.coach_name.localeCompare(b.coach_name)
+          : a.fee_type === 'monthly' ? -1 : 1))
+
       // Coach Report — per-coach summary scoped to the selected month (P3)
       // Included inside the monthly report so there is no separate coach tab/export.
       // Only coaches with at least one enrollment (coach fee payment) that month
@@ -2865,6 +2962,10 @@ if (deserialized.payments) insertRows('payments', deserialized.payments)
         outstandingCount: outstanding.length,
         activeMemberCount: activeCount,
         avgRevenuePerMember: activeCount > 0 ? totalRevenue / activeCount : 0,
+        newMemberList,
+        renewedList,
+        coachAvailments,
+        byMemberType,
         coaches,
       }
     } catch (error) {

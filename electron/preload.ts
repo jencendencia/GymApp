@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Check-ins
   getCheckins: (date?: string, opts?: { offset?: number; limit?: number }) => ipcRenderer.invoke('get-checkins', date, opts),
   getCheckinsCount: (date?: string) => ipcRenderer.invoke('get-checkins-count', date),
+  getMemberCheckins: (memberId: number, limit?: number) => ipcRenderer.invoke('get-member-checkins', memberId, limit),
   createCheckin: (checkin: any) => ipcRenderer.invoke('create-checkin', checkin),
   getActiveCheckins: () => ipcRenderer.invoke('get-active-checkins'),
   checkoutMember: (checkinId: number) => ipcRenderer.invoke('checkout-member', checkinId),

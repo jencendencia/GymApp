@@ -321,6 +321,25 @@
   color: var(--text-faint);
 }
 
+/* Fee-type split inside the summary cards (monthly vs daily coached members) */
+.summary-split {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.summary-split-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 /* Payment tracking list */
 .payment-tracking-list .section-label {
   margin-bottom: 12px;
@@ -363,6 +382,37 @@
 .fee-payment-history .coach-table th:last-child,
 .fee-payment-history .coach-table td:last-child {
   min-width: 150px;
+}
+
+/* Fee type badge in Coach Members table (monthly coaching vs sessions-only/daily) */
+.fee-type-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fee-type-badge.monthly {
+  background: rgba(198, 255, 61, 0.15);
+  color: var(--accent);
+}
+
+.fee-type-badge.daily {
+  background: rgba(255, 176, 32, 0.15);
+  color: #ffb020;
+}
+
+:root[data-theme='light'] .fee-type-badge.monthly {
+  background: rgba(127, 184, 0, 0.14);
+  color: #5f8c00;
+}
+
+:root[data-theme='light'] .fee-type-badge.daily {
+  background: rgba(199, 126, 0, 0.12);
+  color: #a06800;
 }
 
 /* Enroll icon */

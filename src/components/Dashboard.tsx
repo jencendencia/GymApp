@@ -23,10 +23,14 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
   const [showExpiredModal, setShowExpiredModal] = useState(false)
   const [showMonthlyModal, setShowMonthlyModal] = useState(false)
   const [showDailyModal, setShowDailyModal] = useState(false)
+  // Top cards: show members CHECKED IN today, split by plan type (monthly vs daily)
+  const [planCheckinModal, setPlanCheckinModal] = useState<'monthly' | 'daily' | null>(null)
   const [expiredMembers, setExpiredMembers] = useState<Member[]>([])
   // Active members split by plan type: monthly vs daily-session enrollments
   const [monthlyMembers, setMonthlyMembers] = useState<Member[]>([])
   const [dailyMembers, setDailyMembers] = useState<Member[]>([])
+  // Full member list — used to resolve each check-in's plan type for the cards
+  const [allMembers, setAllMembers] = useState<Member[]>([])
   const [checkingOutGuestId, setCheckingOutGuestId] = useState<number | null>(null)
   const [checkingOut, setCheckingOut] = useState<number | null>(null)
   const [kioskBusy, setKioskBusy] = useState(false)
@@ -93,6 +97,7 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
   const loadMemberBreakdown = useCallback(async () => {
     try {
       const data = await window.electronAPI.getMembers()
+      setAllMembers(data)
       setExpiredMembers(data.filter(m => m.status === 'expired'))
       setMonthlyMembers(data.filter(m => m.status === 'active' && m.plan_type === 'monthly' && !m.frozen))
       setDailyMembers(data.filter(m => m.status === 'active' && m.plan_type === 'daily'))
@@ -205,6 +210,11 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
 
   const checkedInCount = activeCheckins.length
 
+  // Currently checked-in members split by plan type — feeds the Monthly / Daily cards
+  const planTypeById = new Map(allMembers.map((m) => [m.id, m.plan_type]))
+  const checkedInMonthly = activeCheckins.filter((c) => planTypeById.get(c.member_id) === 'monthly')
+  const checkedInDaily = activeCheckins.filter((c) => planTypeById.get(c.member_id) === 'daily')
+
   return (
     <div className="dashboard">
       {/* Top greeting */}
@@ -248,6 +258,67 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
           <div className="dash-stat-body">
             <span className="dash-stat-number display-text">{stats.activeMembers}</span>
             <span className="dash-stat-label">Active Members</span>
+          </div>
+        </div>
+
+        {/* Monthly Members Checked In (card — opens the checked-in list modal) */}
+        <div
+          className="dash-stat-card dash-stat-card--clickable"
+          onClick={() => {
+            loadActiveCheckins()
+            setPlanCheckinModal('monthly')
+          }}
+          title="View monthly members currently checked in"
+        >
+          <div className="dash-stat-icon monthly-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M3 9H21" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M8 2V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M16 2V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <div className="dash-stat-body">
+            <span className="dash-stat-number display-text">{checkedInMonthly.length}</span>
+            <span className="dash-stat-label">Monthly Checked In</span>
+          </div>
+          <div className="dash-stat-arrow">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+        </div>
+
+        {/* Daily Members Checked In (card — opens the checked-in list modal) */}
+        <div
+          className="dash-stat-card dash-stat-card--clickable"
+          onClick={() => {
+            loadActiveCheckins()
+            setPlanCheckinModal('daily')
+          }}
+          title="View daily session members currently checked in"
+        >
+          <div className="dash-stat-icon daily-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M12 2V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M12 20V22" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M2 12H4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M20 12H22" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M5 5L6.4 6.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M17.6 17.6L19 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M5 19L6.4 17.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M17.6 6.4L19 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <div className="dash-stat-body">
+            <span className="dash-stat-number display-text">{checkedInDaily.length}</span>
+            <span className="dash-stat-label">Daily Checked In</span>
+          </div>
+          <div className="dash-stat-arrow">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4L10 8L6 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </div>
         </div>
 
@@ -900,6 +971,94 @@ function Dashboard({ stats, recentCheckins, expiringSoon, onRefresh }: Dashboard
           </div>
         </div>
       )}
+
+      {/* ── Monthly / Daily Checked-In Modal (top cards) ── */}
+      {planCheckinModal && (() => {
+        const list = planCheckinModal === 'monthly' ? checkedInMonthly : checkedInDaily
+        const label = planCheckinModal === 'monthly' ? 'Monthly' : 'Daily Session'
+        return (
+          <div className="dash-modal-overlay" onClick={() => setPlanCheckinModal(null)}>
+            <div className="dash-modal" onClick={e => e.stopPropagation()}>
+              <div className="dash-modal-header">
+                <div>
+                  <h2 className="dash-modal-title">{label} Members Checked In</h2>
+                  <p className="dash-modal-subtitle">
+                    {list.length} {label.toLowerCase()} member{list.length !== 1 ? 's' : ''} currently checked in
+                  </p>
+                </div>
+                <button className="dash-modal-close" onClick={() => setPlanCheckinModal(null)}>
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M15 5L5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    <path d="M5 5L15 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </div>
+              <div className="dash-modal-body">
+                {list.length === 0 ? (
+                  <div className="dash-modal-empty">
+                    <p>No {label.toLowerCase()} members are currently checked in</p>
+                  </div>
+                ) : (
+                  <table className="dash-modal-table">
+                    <thead>
+                      <tr>
+                        <th>Member</th>
+                        <th>ID</th>
+                        <th>Check-in Time</th>
+                        <th>Method</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.map((checkin) => (
+                        <tr key={checkin.id} className="dash-modal-row">
+                          <td>
+                            <div className="dash-modal-member">
+                              <div className="dash-modal-avatar">
+                                {checkin.name?.charAt(0).toUpperCase() || '?'}
+                              </div>
+                              <span>{checkin.name}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="mono-text">{checkin.member_code}</span>
+                          </td>
+                          <td>
+                            <span className="mono-text">{formatTimestamp(checkin.timestamp)}</span>
+                          </td>
+                          <td>
+                            <span className={`dash-modal-method method-${checkin.method}`}>
+                              {checkin.method === 'fingerprint' ? 'Fingerprint' : 'Manual'}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-sm btn-checkout"
+                              onClick={() => handleCheckout(checkin)}
+                              disabled={checkingOut === checkin.id}
+                            >
+                              {checkingOut === checkin.id ? (
+                                <span className="btn-spinner-sm" />
+                              ) : (
+                                'Check Out'
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div className="dash-modal-footer">
+                <span className="dash-modal-footer-text">
+                  {list.length} checked in • {label} plan
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Expired Members Modal (full list) ── */}
       {showExpiredModal && (

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import './Coach.css'
 import { Coach as CoachType, Member, CoachFeePayment } from '../types/electron'
 import { log } from '../lib/logger'
-import { todayLocal, todayLocalOf } from '../lib/dates'
+import { todayLocal, todayLocalOf, addDaysLocal } from '../lib/dates'
 import { notifyDataChanged, useDataVersion } from '../lib/data'
 import { formatMoney } from '../lib/format'
 import ConfirmModal from './ConfirmModal'
@@ -46,6 +46,42 @@ function Coach() {
     member_id: 0,
     amount: '',
     notes: '',
+  })
+
+  // Coach renewal state (Coach Members tab)
+  const [renewTarget, setRenewTarget] = useState<Member | null>(null)
+  const [renewForm, setRenewForm] = useState({
+    start: '',
+    end: '',
+    record_payment: false,
+    payment_amount: '',
+    payment_notes: '',
+  })
+
+  // Transfer to monthly coaching state (for sessions-only / daily members)
+  const [transferTarget, setTransferTarget] = useState<Member | null>(null)
+  // Direction of the transfer: 'monthly' = sessions-only → monthly, 'daily' = monthly → sessions-only
+  const [transferMode, setTransferMode] = useState<'monthly' | 'daily'>('monthly')
+  const [transferForm, setTransferForm] = useState({
+    start: '',
+    end: '',
+    record_payment: false,
+    payment_amount: '',
+    payment_notes: '',
+  })
+
+  // Remove-from-coach confirmation state
+  const [removeTarget, setRemoveTarget] = useState<Member | null>(null)
+
+  // Transfer-to-another-coach state
+  const [coachTransferTarget, setCoachTransferTarget] = useState<Member | null>(null)
+  const [coachTransferForm, setCoachTransferForm] = useState({
+    coach_id: 0,
+    start: '',
+    end: '',
+    record_payment: false,
+    payment_amount: '',
+    payment_notes: '',
   })
 
   const [coachForm, setCoachForm] = useState({
@@ -254,31 +290,75 @@ const handleRecordFeePayment = async () => {
     return todayLocalOf(date)
   }
 
+  const addDays = (dateStr: string, days: number) =>
+    addDaysLocal(new Date(dateStr + 'T12:00:00'), days)
+
+  /**
+   * The update-member IPC requires the full member payload, so build it from
+   * the loaded member and let each action override only the coaching fields.
+   */
+  const buildMemberUpdate = (member: Member, overrides: Record<string, any>) => ({
+    name: member.name,
+    email: member.email || undefined,
+    phone: member.phone || undefined,
+    photo: member.photo || undefined,
+    emergency_contact: member.emergency_contact || undefined,
+    emergency_phone: member.emergency_phone || undefined,
+    plan_id: member.plan_id || undefined,
+    plan_start: member.plan_start || undefined,
+    plan_end: member.plan_end || undefined,
+    height: member.height,
+    weight: member.weight,
+    birthday: member.birthday || undefined,
+    coach_id: member.coach_id || undefined,
+    coaching_start: member.coaching_start || undefined,
+    coaching_end: member.coaching_end || undefined,
+    coach_fee_type: member.coach_fee_type,
+    balance: member.balance || 0,
+    status: member.status,
+    ...overrides,
+  })
+
+  const feeTypeOf = (member: Member): 'monthly' | 'daily' =>
+    member.coach_fee_type === 'daily' ? 'daily' : 'monthly'
+
+  /** Default coaching end for a given start: +1 month (monthly) or +1 day (daily/sessions). */
+  const coachingEndDefault = (start: string, feeType: 'monthly' | 'daily') =>
+    feeType === 'daily' ? addDays(start, 1) : addOneMonth(start)
+
+  /** Renewal starts right after the current period; if it already lapsed, today. */
+  const renewalStart = (member: Member) => {
+    const today = todayLocal()
+    if (member.coaching_end && member.coaching_end >= today) return addDays(member.coaching_end, 1)
+    return today
+  }
+
+  /** The coach's fee matching the member's fee type (monthly vs daily/sessions). */
+  const coachFeeForMember = (member: Member) => {
+    const coach = coaches.find(c => c.id === member.coach_id)
+    if (!coach) return 0
+    return feeTypeOf(member) === 'daily'
+      ? (coach.professional_fee_daily || 0)
+      : (coach.professional_fee || 0)
+  }
+
+  const refreshCurrentCoachMembers = () => {
+    if (selectedCoachForMembers && selectedCoachForMembers > 0) {
+      loadCoachMembers(selectedCoachForMembers)
+    }
+  }
+
   const handleEnrollToCoach = async () => {
     if (!enrollMember || !enrollForm.coach_id) return
 
     try {
       // Update member with coach assignment
-      await window.electronAPI.updateMember(enrollMember.id, {
-        name: enrollMember.name,
-        email: enrollMember.email || undefined,
-        phone: enrollMember.phone || undefined,
-        photo: enrollMember.photo || undefined,
-        emergency_contact: enrollMember.emergency_contact || undefined,
-        emergency_phone: enrollMember.emergency_phone || undefined,
-        plan_id: enrollMember.plan_id || undefined,
-        plan_start: enrollMember.plan_start || undefined,
-        plan_end: enrollMember.plan_end || undefined,
-        height: enrollMember.height,
-        weight: enrollMember.weight,
-        birthday: enrollMember.birthday || undefined,
+      await window.electronAPI.updateMember(enrollMember.id, buildMemberUpdate(enrollMember, {
         coach_id: enrollForm.coach_id,
         coaching_start: enrollForm.coaching_start || undefined,
         coaching_end: enrollForm.coaching_end || undefined,
         coach_fee_type: enrollForm.fee_type,
-        balance: enrollMember.balance || 0,
-        status: enrollMember.status,
-      })
+      }))
 
       // Record coach fee payment if enabled
       if (enrollForm.record_payment && enrollForm.payment_amount) {
@@ -342,6 +422,276 @@ const handleRecordFeePayment = async () => {
     })
     setShowEnrollModal(true)
   }
+
+  // ── Coach renewal ──
+  const openRenewModal = (member: Member) => {
+    const feeType = feeTypeOf(member)
+    const start = renewalStart(member)
+    setRenewTarget(member)
+    setRenewForm({
+      start,
+      end: coachingEndDefault(start, feeType),
+      record_payment: false,
+      payment_amount: '',
+      payment_notes: '',
+    })
+  }
+
+  const handleRenewCoaching = async () => {
+    if (!renewTarget || !renewForm.start || !renewForm.end) return
+    try {
+      const feeType = feeTypeOf(renewTarget)
+      await window.electronAPI.updateMember(renewTarget.id, buildMemberUpdate(renewTarget, {
+        coach_id: renewTarget.coach_id,
+        coaching_start: renewForm.start,
+        coaching_end: renewForm.end,
+        coach_fee_type: feeType,
+      }))
+
+      if (renewForm.record_payment && renewForm.payment_amount) {
+        await window.electronAPI.createCoachFeePayment({
+          coach_id: renewTarget.coach_id!,
+          member_id: renewTarget.id,
+          amount: Number(renewForm.payment_amount),
+          notes: renewForm.payment_notes || undefined,
+        })
+      }
+
+      log.action({
+        action: 'renew_coaching',
+        entity_type: 'member',
+        entity_id: renewTarget.id,
+        details: JSON.stringify({
+          member_name: renewTarget.name,
+          coach_name: renewTarget.coach_name || `Coach #${renewTarget.coach_id}`,
+          fee_type: feeType,
+          coaching_start: renewForm.start,
+          coaching_end: renewForm.end,
+          payment: renewForm.record_payment && renewForm.payment_amount ? Number(renewForm.payment_amount) : 0,
+        }),
+      })
+
+      setRenewTarget(null)
+      refreshCurrentCoachMembers()
+      notifyDataChanged()
+    } catch (error) {
+      console.error('Failed to renew coaching:', error)
+    }
+  }
+
+  // ── Transfer between coaching fee types: sessions-only (daily) ↔ monthly ──
+  const openTransferModal = (member: Member, mode: 'monthly' | 'daily') => {
+    const start = todayLocal()
+    setTransferTarget(member)
+    setTransferMode(mode)
+    setTransferForm({
+      start,
+      end: coachingEndDefault(start, mode),
+      record_payment: false,
+      payment_amount: '',
+      payment_notes: '',
+    })
+  }
+
+  const handleTransferCoaching = async () => {
+    if (!transferTarget || !transferForm.start || !transferForm.end) return
+    try {
+      await window.electronAPI.updateMember(transferTarget.id, buildMemberUpdate(transferTarget, {
+        coach_id: transferTarget.coach_id,
+        coach_fee_type: transferMode,
+        coaching_start: transferForm.start,
+        coaching_end: transferForm.end,
+      }))
+
+      if (transferForm.record_payment && transferForm.payment_amount) {
+        await window.electronAPI.createCoachFeePayment({
+          coach_id: transferTarget.coach_id!,
+          member_id: transferTarget.id,
+          amount: Number(transferForm.payment_amount),
+          notes: transferForm.payment_notes || undefined,
+        })
+      }
+
+      log.action({
+        action: transferMode === 'monthly' ? 'transfer_coaching_monthly' : 'transfer_coaching_daily',
+        entity_type: 'member',
+        entity_id: transferTarget.id,
+        details: JSON.stringify({
+          member_name: transferTarget.name,
+          coach_name: transferTarget.coach_name || `Coach #${transferTarget.coach_id}`,
+          from_fee_type: feeTypeOf(transferTarget),
+          to_fee_type: transferMode,
+          coaching_start: transferForm.start,
+          coaching_end: transferForm.end,
+          payment: transferForm.record_payment && transferForm.payment_amount ? Number(transferForm.payment_amount) : 0,
+        }),
+      })
+
+      setTransferTarget(null)
+      refreshCurrentCoachMembers()
+      notifyDataChanged()
+    } catch (error) {
+      console.error('Failed to transfer member coaching fee type:', error)
+    }
+  }
+
+  // ── Transfer member to another coach (keeps fee type and payment history) ──
+  const openCoachTransferModal = (member: Member) => {
+    const feeType = feeTypeOf(member)
+    const start = member.coaching_start || todayLocal()
+    setCoachTransferTarget(member)
+    setCoachTransferForm({
+      coach_id: 0,
+      start,
+      end: member.coaching_end || coachingEndDefault(start, feeType),
+      record_payment: false,
+      payment_amount: '',
+      payment_notes: '',
+    })
+  }
+
+  const handleTransferToCoach = async () => {
+    if (!coachTransferTarget || !coachTransferForm.coach_id || !coachTransferForm.start || !coachTransferForm.end) return
+    try {
+      const newCoach = coaches.find((c) => c.id === coachTransferForm.coach_id)
+      await window.electronAPI.updateMember(coachTransferTarget.id, buildMemberUpdate(coachTransferTarget, {
+        coach_id: coachTransferForm.coach_id,
+        coaching_start: coachTransferForm.start,
+        coaching_end: coachTransferForm.end,
+      }))
+
+      if (coachTransferForm.record_payment && coachTransferForm.payment_amount) {
+        await window.electronAPI.createCoachFeePayment({
+          coach_id: coachTransferForm.coach_id,
+          member_id: coachTransferTarget.id,
+          amount: Number(coachTransferForm.payment_amount),
+          notes: coachTransferForm.payment_notes || undefined,
+        })
+      }
+
+      log.action({
+        action: 'transfer_coach',
+        entity_type: 'member',
+        entity_id: coachTransferTarget.id,
+        details: JSON.stringify({
+          member_name: coachTransferTarget.name,
+          from_coach: coachTransferTarget.coach_name || `Coach #${coachTransferTarget.coach_id}`,
+          to_coach: newCoach?.name || `Coach #${coachTransferForm.coach_id}`,
+          fee_type: feeTypeOf(coachTransferTarget),
+          coaching_start: coachTransferForm.start,
+          coaching_end: coachTransferForm.end,
+          payment: coachTransferForm.record_payment && coachTransferForm.payment_amount ? Number(coachTransferForm.payment_amount) : 0,
+        }),
+      })
+
+      setCoachTransferTarget(null)
+      refreshCurrentCoachMembers()
+      notifyDataChanged()
+    } catch (error) {
+      console.error('Failed to transfer member to another coach:', error)
+    }
+  }
+
+  // ── Remove member from coach (keeps fee payment history) ──
+  const handleRemoveFromCoach = async () => {
+    if (!removeTarget) return
+    try {
+      await window.electronAPI.updateMember(removeTarget.id, buildMemberUpdate(removeTarget, {
+        coach_id: undefined,
+        coaching_start: undefined,
+        coaching_end: null,
+      }))
+
+      log.action({
+        action: 'remove_coach',
+        entity_type: 'member',
+        entity_id: removeTarget.id,
+        details: JSON.stringify({
+          member_name: removeTarget.name,
+          coach_name: removeTarget.coach_name || `Coach #${removeTarget.coach_id}`,
+          fee_type: removeTarget.coach_fee_type || 'monthly',
+        }),
+      })
+
+      setRemoveTarget(null)
+      refreshCurrentCoachMembers()
+      notifyDataChanged()
+    } catch (error) {
+      console.error('Failed to remove member from coach:', error)
+    }
+  }
+
+  // Payment Tracking: split a payment total by the paying member's coaching fee type
+  const sumByFeeType = (payments: CoachFeePayment[], type: 'monthly' | 'daily') =>
+    payments
+      .filter((p) => (p.coach_fee_type === 'daily' ? 'daily' : 'monthly') === type)
+      .reduce((sum, p) => sum + (p.amount || 0), 0)
+
+  // Payment section shared by the Renew, Fee-Type Transfer, and Coach Transfer modals (optional coach fee payment)
+  const renderCoachingPaymentSection = <T extends { record_payment: boolean; payment_amount: string; payment_notes: string }>(
+    form: T,
+    setForm: (f: T) => void,
+    defaultFee: number,
+    mutedNote: string
+  ) => (
+    <div className="enroll-payment-section" style={{ marginTop: 24 }}>
+      <div className="enroll-payment-header">
+        <span className="section-label" style={{ margin: 0 }}>💰 Coach Fee Payment (optional)</span>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => {
+            setForm({ ...form, record_payment: true, payment_amount: defaultFee ? String(defaultFee) : '' })
+          }}
+          disabled={form.record_payment}
+        >
+          + Add Payment
+        </button>
+      </div>
+      {form.record_payment && (
+        <div className="enroll-payment-form" style={{ marginTop: 12 }}>
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr auto' }}>
+            <div className="form-group">
+              <label>Amount</label>
+              <input
+                type="number"
+                className="input"
+                value={form.payment_amount}
+                onChange={(e) => setForm({ ...form, payment_amount: e.target.value })}
+                placeholder="0.00"
+                step="0.01"
+                min="0"
+                autoFocus
+              />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <input
+                type="text"
+                className="input"
+                value={form.payment_notes}
+                onChange={(e) => setForm({ ...form, payment_notes: e.target.value })}
+                placeholder="Optional note"
+              />
+            </div>
+            <div className="form-group" style={{ justifyContent: 'flex-end' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setForm({ ...form, record_payment: false, payment_amount: '', payment_notes: '' })}
+                style={{ marginTop: 22 }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {!form.record_payment && (
+        <p className="enroll-payment-muted" style={{ color: 'var(--text-faint)', fontSize: 13, marginTop: 8 }}>
+          {mutedNote}
+        </p>
+      )}
+    </div>
+  )
 
   return (
     <div className="coach-page">
@@ -478,6 +828,7 @@ const handleRecordFeePayment = async () => {
                     <th>Member ID</th>
                     <th>Name</th>
                     <th>Plan</th>
+                    <th>Fee Type</th>
                     <th>Status</th>
                     <th>Coaching Start</th>
                     <th>Coaching End</th>
@@ -487,7 +838,7 @@ const handleRecordFeePayment = async () => {
                 <tbody>
                   {(selectedCoachForMembers === -1 ? unassignedMembers : coachMembers).length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="empty-row">
+                      <td colSpan={8} className="empty-row">
                         {selectedCoachForMembers === -1
                           ? 'All members are assigned to a coach'
                           : 'No members assigned to this coach'}
@@ -499,6 +850,15 @@ const handleRecordFeePayment = async () => {
                         <td className="mono-text">{member.member_id}</td>
                         <td>{member.name}</td>
                         <td>{member.plan_name || 'No plan'}</td>
+                        <td>
+                          {member.coach_id ? (
+                            <span className={`fee-type-badge ${feeTypeOf(member)}`}>
+                              {feeTypeOf(member) === 'daily' ? 'Daily' : 'Monthly'}
+                            </span>
+                          ) : (
+                            <span className="text-faint">—</span>
+                          )}
+                        </td>
                         <td>
                           <span className={`status-badge ${member.status}`}>
                             {member.status}
@@ -516,7 +876,7 @@ const handleRecordFeePayment = async () => {
                         </td>
                         <td>
                           <div className="coach-actions">
-                            {selectedCoachForMembers === -1 && (
+                            {selectedCoachForMembers === -1 ? (
                               <button
                                 className="btn-icon enroll-icon"
                                 onClick={() => openEnrollModal(member)}
@@ -524,6 +884,47 @@ const handleRecordFeePayment = async () => {
                               >
                                 👤+
                               </button>
+                            ) : (
+                              <>
+                                <button
+                                  className="btn-icon"
+                                  onClick={() => openRenewModal(member)}
+                                  title="Renew Coaching"
+                                >
+                                  🔄
+                                </button>
+                                <button
+                                  className="btn-icon"
+                                  onClick={() => openCoachTransferModal(member)}
+                                  title="Transfer to Another Coach"
+                                >
+                                  ⇄
+                                </button>
+                                {feeTypeOf(member) === 'daily' ? (
+                                  <button
+                                    className="btn-icon"
+                                    onClick={() => openTransferModal(member, 'monthly')}
+                                    title="Transfer to Monthly Coaching"
+                                  >
+                                    📅
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="btn-icon"
+                                    onClick={() => openTransferModal(member, 'daily')}
+                                    title="Transfer to Daily (Sessions-Only) Coaching"
+                                  >
+                                    🕐
+                                  </button>
+                                )}
+                                <button
+                                  className="btn-icon danger"
+                                  onClick={() => setRemoveTarget(member)}
+                                  title="Remove from Coach"
+                                >
+                                  ✕
+                                </button>
+                              </>
                             )}
                           </div>
                         </td>
@@ -580,11 +981,31 @@ const handleRecordFeePayment = async () => {
                   <span className="summary-label">Daily Total</span>
                   <span className="summary-value accent">{formatMoney(dailyTotal)}</span>
                   <span className="summary-count">{dailyPayments.length} payment(s)</span>
+                  <span className="summary-split">
+                    <span className="summary-split-row">
+                      <span>Monthly members</span>
+                      <span className="mono-text">{formatMoney(sumByFeeType(dailyPayments, 'monthly'))}</span>
+                    </span>
+                    <span className="summary-split-row">
+                      <span>Daily members</span>
+                      <span className="mono-text">{formatMoney(sumByFeeType(dailyPayments, 'daily'))}</span>
+                    </span>
+                  </span>
                 </div>
                 <div className="summary-card">
                   <span className="summary-label">Monthly Total</span>
                   <span className="summary-value">{formatMoney(monthlyTotal)}</span>
                   <span className="summary-count">{monthlyPayments.length} payment(s)</span>
+                  <span className="summary-split">
+                    <span className="summary-split-row">
+                      <span>Monthly members</span>
+                      <span className="mono-text">{formatMoney(sumByFeeType(monthlyPayments, 'monthly'))}</span>
+                    </span>
+                    <span className="summary-split-row">
+                      <span>Daily members</span>
+                      <span className="mono-text">{formatMoney(sumByFeeType(monthlyPayments, 'daily'))}</span>
+                    </span>
+                  </span>
                 </div>
               </div>
 
@@ -1047,6 +1468,257 @@ const handleRecordFeePayment = async () => {
           </div>
         </div>
       )}
+
+      {/* Coach Renewal Modal */}
+      {renewTarget && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">Renew Coaching — {renewTarget.name}</h2>
+              <button className="btn-icon" onClick={() => setRenewTarget(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--text-faint)', fontSize: 13, marginTop: 0 }}>
+                {renewTarget.coach_name ? `Coach: ${renewTarget.coach_name}` : ''}
+                {renewTarget.coaching_end
+                  ? ` · Current period ends ${new Date(renewTarget.coaching_end + 'T12:00:00').toLocaleDateString()}`
+                  : ' · No active coaching period'}
+                {` · ${feeTypeOf(renewTarget) === 'daily' ? 'Daily (sessions)' : 'Monthly'} fee`}
+              </p>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>New Start *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={renewForm.start}
+                    onChange={(e) => {
+                      const start = e.target.value
+                      setRenewForm({
+                        ...renewForm,
+                        start,
+                        end: start ? coachingEndDefault(start, feeTypeOf(renewTarget)) : renewForm.end,
+                      })
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>New End *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={renewForm.end}
+                    onChange={(e) => setRenewForm({ ...renewForm, end: e.target.value })}
+                  />
+                </div>
+              </div>
+              {renderCoachingPaymentSection(
+                renewForm,
+                setRenewForm,
+                coachFeeForMember(renewTarget),
+                'Optionally record a coach fee payment when renewing.'
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setRenewTarget(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleRenewCoaching}
+                disabled={!renewForm.start || !renewForm.end || renewForm.end < renewForm.start}
+              >
+                Renew Coaching
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Coaching Fee Type Modal — sessions-only (daily) ↔ monthly */}
+      {transferTarget && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">
+                Transfer to {transferMode === 'monthly' ? 'Monthly' : 'Daily (Sessions)'} — {transferTarget.name}
+              </h2>
+              <button className="btn-icon" onClick={() => setTransferTarget(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--text-faint)', fontSize: 13, marginTop: 0 }}>
+                {transferTarget.coach_name ? `Coach: ${transferTarget.coach_name}` : ''}
+                {transferMode === 'monthly'
+                  ? ' · Moves this sessions-only (daily) member to a monthly coaching plan.'
+                  : ' · Moves this member from monthly coaching to sessions-only (daily) coaching.'}
+              </p>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>{transferMode === 'monthly' ? 'Monthly Start' : 'Daily Start'} *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={transferForm.start}
+                    onChange={(e) => {
+                      const start = e.target.value
+                      setTransferForm({
+                        ...transferForm,
+                        start,
+                        end: start ? coachingEndDefault(start, transferMode) : transferForm.end,
+                      })
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>{transferMode === 'monthly' ? 'Monthly End' : 'Daily End'} *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={transferForm.end}
+                    onChange={(e) => setTransferForm({ ...transferForm, end: e.target.value })}
+                  />
+                </div>
+              </div>
+              {renderCoachingPaymentSection(
+                transferForm,
+                setTransferForm,
+                transferMode === 'monthly'
+                  ? coaches.find((c) => c.id === transferTarget.coach_id)?.professional_fee || 0
+                  : coaches.find((c) => c.id === transferTarget.coach_id)?.professional_fee_daily || 0,
+                transferMode === 'monthly'
+                  ? 'Optionally record the monthly coach fee payment.'
+                  : 'Optionally record the daily coach fee payment.'
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setTransferTarget(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleTransferCoaching}
+                disabled={!transferForm.start || !transferForm.end || transferForm.end < transferForm.start}
+              >
+                Transfer to {transferMode === 'monthly' ? 'Monthly' : 'Daily (Sessions)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer to Another Coach Modal */}
+      {coachTransferTarget && (
+        <div className="modal-overlay">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="display-text">Transfer Coach — {coachTransferTarget.name}</h2>
+              <button className="btn-icon" onClick={() => setCoachTransferTarget(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--text-faint)', fontSize: 13, marginTop: 0 }}>
+                {coachTransferTarget.coach_name ? `Current coach: ${coachTransferTarget.coach_name}` : ''}
+                {` · ${feeTypeOf(coachTransferTarget) === 'daily' ? 'Daily (sessions)' : 'Monthly'} coaching continues under the new coach.`}
+              </p>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>New Coach *</label>
+                  <select
+                    className="input"
+                    value={coachTransferForm.coach_id}
+                    onChange={(e) => setCoachTransferForm({ ...coachTransferForm, coach_id: Number(e.target.value) })}
+                  >
+                    <option value={0}>— Select coach —</option>
+                    {coaches
+                      .filter((coach) => coach.id !== coachTransferTarget.coach_id)
+                      .map((coach) => (
+                        <option key={coach.id} value={coach.id}>
+                          {coach.name}
+                        </option>
+                      ))}
+                  </select>
+                  {coachTransferForm.coach_id > 0 && (() => {
+                    const newCoach = coaches.find((c) => c.id === coachTransferForm.coach_id)
+                    return newCoach ? (
+                      <div className="enroll-coach-fee-display">
+                        <span className="enroll-coach-fee-label">
+                          {feeTypeOf(coachTransferTarget) === 'daily' ? 'Daily Fee' : 'Monthly Fee'}
+                        </span>
+                        <span className="enroll-coach-fee-amount">
+                          {feeTypeOf(coachTransferTarget) === 'daily'
+                            ? (newCoach.professional_fee_daily ? formatMoney(newCoach.professional_fee_daily) : '—')
+                            : (newCoach.professional_fee ? formatMoney(newCoach.professional_fee) : '—')}
+                        </span>
+                      </div>
+                    ) : null
+                  })()}
+                </div>
+                <div className="form-group">
+                  <label>Coaching Start *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={coachTransferForm.start}
+                    onChange={(e) => {
+                      const start = e.target.value
+                      setCoachTransferForm({
+                        ...coachTransferForm,
+                        start,
+                        end: start ? coachingEndDefault(start, feeTypeOf(coachTransferTarget)) : coachTransferForm.end,
+                      })
+                    }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Coaching End *</label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={coachTransferForm.end}
+                    onChange={(e) => setCoachTransferForm({ ...coachTransferForm, end: e.target.value })}
+                  />
+                </div>
+              </div>
+              {renderCoachingPaymentSection(
+                coachTransferForm,
+                setCoachTransferForm,
+                (() => {
+                  const newCoach = coaches.find((c) => c.id === coachTransferForm.coach_id)
+                  if (!newCoach) return 0
+                  return feeTypeOf(coachTransferTarget) === 'daily'
+                    ? (newCoach.professional_fee_daily || 0)
+                    : (newCoach.professional_fee || 0)
+                })(),
+                'Optionally record a coach fee payment for the new coach.'
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setCoachTransferTarget(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleTransferToCoach}
+                disabled={!coachTransferForm.coach_id || !coachTransferForm.start || !coachTransferForm.end || coachTransferForm.end < coachTransferForm.start}
+              >
+                Transfer to Coach
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P2 5.7: destructive-action confirmation — remove member from coach */}
+      <ConfirmModal
+        open={!!removeTarget}
+        title="Remove from Coach"
+        message={`Remove "${removeTarget?.name || ''}" from this coach? They will move back to unassigned members and their coaching period will be cleared. Recorded fee payments are kept in history.`}
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        icon="👤"
+        onConfirm={() => removeTarget && handleRemoveFromCoach()}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   )
 }

@@ -195,6 +195,16 @@
   color: var(--info, #4da8ff);
 }
 
+.dash-stat-icon.monthly-icon {
+  background: rgba(88, 204, 124, 0.1);
+  color: var(--accent, #58cc7c);
+}
+
+.dash-stat-icon.daily-icon {
+  background: rgba(77, 168, 255, 0.1);
+  color: var(--info, #4da8ff);
+}
+
 .dash-stat-badge {
   position: absolute;
   top: -4px;
